@@ -73,7 +73,7 @@ def set_scale(fmt, tpl_name, scale, as_default=False):
             ss.tpl_scale[fmt] = {}
         ss.tpl_scale[fmt][tpl_name] = scale
 
-def img_to_b64(img: Image.Image, max_w=780) -> tuple:
+def img_to_b64(img: Image.Image, max_w=1200) -> tuple:
     """Returns (b64_str, display_w, display_h, orig_w, orig_h)"""
     orig_w, orig_h = img.size
     disp_w = min(orig_w, max_w)
@@ -81,7 +81,7 @@ def img_to_b64(img: Image.Image, max_w=780) -> tuple:
     disp_h = int(orig_h * ratio)
     resized = img.resize((disp_w, disp_h), Image.LANCZOS).convert("RGB")
     buf = io.BytesIO()
-    resized.save(buf, format="JPEG", quality=88)
+    resized.save(buf, format="JPEG", quality=92)
     b64 = base64.b64encode(buf.getvalue()).decode()
     return b64, disp_w, disp_h, orig_w, orig_h
 
@@ -139,73 +139,71 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
 # ── Click canvas ───────────────────────────────────────────────────────────
 def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
     """
-    Renders image with JS click. Coordinates returned are in ORIGINAL image pixels.
-    The JS reads the actual rendered size of the image via getBoundingClientRect
-    to compute the correct scale factor at click time.
+    Shows image via st.image (full width, no iframe issues).
+    A transparent HTML overlay captures clicks and crosshair.
     """
-    b64, disp_w, disp_h, orig_w, orig_h = img_to_b64(img)
+    orig_w, orig_h = img.size
 
+    # Show the actual image via st.image — full width, no iframe
+    st.image(img, use_container_width=True)
+
+    # Transparent click overlay — same aspect ratio, positioned over the image
+    aspect = orig_h / orig_w
+    # We use a % padding-bottom trick to match the image aspect ratio
     html = f"""
-<div style="position:relative;display:inline-block;max-width:100%">
-  <img id="cimg_{canvas_key}"
-       src="data:image/jpeg;base64,{b64}"
-       style="max-width:100%;display:block;border-radius:8px;cursor:crosshair"
-       draggable="false"/>
-  <canvas id="ccv_{canvas_key}"
-          style="position:absolute;top:0;left:0;pointer-events:none;border-radius:8px"></canvas>
+<div id="wrap_{canvas_key}" style="position:relative;width:100%;padding-bottom:{aspect*100:.4f}%;margin-top:-8px;cursor:crosshair;">
+  <canvas id="cv_{canvas_key}"
+    style="position:absolute;top:0;left:0;width:100%;height:100%;border-radius:4px;">
+  </canvas>
 </div>
-<div id="cinfo_{canvas_key}" style="font-size:11px;color:#8888a0;margin-top:4px;font-family:monospace;min-height:18px"></div>
-
+<div id="info_{canvas_key}" style="font-size:11px;color:#7c6fff;font-family:monospace;min-height:16px;margin-top:2px;"></div>
 <script>
 (function(){{
-  const img   = document.getElementById('cimg_{canvas_key}');
-  const cv    = document.getElementById('ccv_{canvas_key}');
-  const info  = document.getElementById('cinfo_{canvas_key}');
-  const ORIG_W = {orig_w};
-  const ORIG_H = {orig_h};
+  const wrap = document.getElementById('wrap_{canvas_key}');
+  const cv   = document.getElementById('cv_{canvas_key}');
+  const info = document.getElementById('info_{canvas_key}');
+  const OW = {orig_w}, OH = {orig_h};
 
-  function syncCanvas() {{
-    cv.width  = img.offsetWidth;
-    cv.height = img.offsetHeight;
-    cv.style.width  = img.offsetWidth  + 'px';
-    cv.style.height = img.offsetHeight + 'px';
+  function sync() {{
+    cv.width  = wrap.offsetWidth;
+    cv.height = wrap.offsetHeight;
   }}
-  img.addEventListener('load', syncCanvas);
-  if (img.complete) syncCanvas();
-  window.addEventListener('resize', syncCanvas);
+  sync();
+  new ResizeObserver(sync).observe(wrap);
 
-  // Crosshair
-  img.addEventListener('mousemove', function(e) {{
-    syncCanvas();
-    const rect = img.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const origX = Math.round(px / rect.width  * ORIG_W);
-    const origY = Math.round(py / rect.height * ORIG_H);
-    info.textContent = origX + ' , ' + origY + ' px';
+  function toOrig(e) {{
+    const r = wrap.getBoundingClientRect();
+    return {{
+      x: Math.round((e.clientX - r.left) / r.width  * OW),
+      y: Math.round((e.clientY - r.top)  / r.height * OH)
+    }};
+  }}
+
+  wrap.addEventListener('mousemove', function(e) {{
+    const p = toOrig(e);
+    info.textContent = p.x + ' , ' + p.y + ' px';
+    const r = wrap.getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
     const ctx = cv.getContext('2d');
     ctx.clearRect(0,0,cv.width,cv.height);
-    ctx.strokeStyle = 'rgba(245,166,35,0.5)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4,3]);
+    ctx.strokeStyle = 'rgba(245,166,35,0.55)';
+    ctx.lineWidth = 1; ctx.setLineDash([4,3]);
     ctx.beginPath(); ctx.moveTo(px,0); ctx.lineTo(px,cv.height); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0,py); ctx.lineTo(cv.width,py); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,py); ctx.lineTo(cv.width,py);  ctx.stroke();
   }});
 
-  img.addEventListener('click', function(e) {{
-    // Use getBoundingClientRect at click time for correct scale
-    const rect = img.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const origX = Math.round(px / rect.width  * ORIG_W);
-    const origY = Math.round(py / rect.height * ORIG_H);
+  wrap.addEventListener('mouseleave', function() {{
+    cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
+    info.textContent = '';
+  }});
 
-    // Write to hidden input
+  wrap.addEventListener('click', function(e) {{
+    const p = toOrig(e);
     const inputs = window.parent.document.querySelectorAll('input[type="text"]');
     for (const inp of inputs) {{
       if (inp.getAttribute('aria-label') === 'coord_input_{canvas_key}') {{
         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(inp, origX + ',' + origY);
+        setter.call(inp, p.x + ',' + p.y);
         inp.dispatchEvent(new Event('input', {{bubbles:true}}));
         break;
       }}
@@ -214,7 +212,7 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
 }})();
 </script>
 """
-    st.components.v1.html(html, height=disp_h + 30, scrolling=False)
+    st.components.v1.html(html, height=60, scrolling=False)
     coord_str = st.text_input("", key=f"coord_input_{canvas_key}",
                                label_visibility="collapsed",
                                placeholder="clicca sull'immagine…")
