@@ -146,16 +146,6 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
       var oy = Math.round(dy * OH / c.height);
       return[ox,oy,dx,dy];
     }
-    c.onmousemove=function(e){
-      var p=pos(e);
-      ctx.drawImage(im,0,0,DW,DH);
-      ctx.strokeStyle='rgba(255,224,51,0.8)';ctx.lineWidth=1;ctx.setLineDash([5,4]);
-      ctx.beginPath();ctx.moveTo(p[2],0);ctx.lineTo(p[2],DH);ctx.stroke();
-      ctx.beginPath();ctx.moveTo(0,p[3]);ctx.lineTo(DW,p[3]);ctx.stroke();
-      ctx.setLineDash([]);
-      L.textContent='X='+p[0]+'  Y='+p[1];
-    };
-    c.onmouseleave=function(){ctx.drawImage(im,0,0,DW,DH);L.textContent='muovi il mouse';};
     c.onclick=function(e){
       var p=pos(e);
       ctx.drawImage(im,0,0,DW,DH);
