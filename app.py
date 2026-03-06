@@ -115,12 +115,11 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
         result.paste(g,(max(0,ox),max(0,oy)),mask)
     return result
 
-# ── Click canvas v4 — misura dimensione reale a runtime ────────────────────
+# ── Click canvas v5 — unique click ID per distinguere P1 da P2 ─────────────
 def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
     flat = flatten(img)
     orig_w, orig_h = flat.size
 
-    # Dimensione display target
     disp_w = min(orig_w, 480)
     disp_h = int(orig_h * disp_w / orig_w)
 
@@ -156,38 +155,27 @@ html,body{{margin:0;padding:0;background:#111;overflow:hidden}}
 
   imgEl.onclick = function(e) {{
     e.preventDefault();
-
-    // offsetX/Y = posizione click relativa all'elemento img, in CSS px
     var cx = e.offsetX;
     var cy = e.offsetY;
-
-    // Dimensione CSS reale dell'immagine in questo momento
-    // (usa offsetWidth/offsetHeight che includono bordi se presenti,
-    //  ma qui non ne abbiamo, quindi = dimensione CSS pura)
     var renderedW = imgEl.offsetWidth;
     var renderedH = imgEl.offsetHeight;
-
-    // Ratio calcolato sulla dimensione REALE renderizzata
     var ox = Math.round(cx * OW / renderedW);
     var oy = Math.round(cy * OH / renderedH);
     ox = Math.max(0, Math.min(OW - 1, ox));
     oy = Math.max(0, Math.min(OH - 1, oy));
 
-    // Marker visuale
     dot.style.display = 'block';
     dot.style.left = cx + 'px';
     dot.style.top  = cy + 'px';
-
     lb.textContent = 'X=' + ox + ' Y=' + oy +
-      ' (off=' + cx + ',' + cy +
-      ' rendered=' + renderedW + 'x' + renderedH +
-      ' orig=' + OW + 'x' + OH + ')';
+      ' (off=' + cx + ',' + cy + ' rend=' + renderedW + 'x' + renderedH + ')';
 
-    // Invia a Streamlit
+    // Valore con timestamp unico per distinguere click diversi
+    var val = ox + ',' + oy + ',' + Date.now();
     var inp = window.parent.document.querySelector('input[aria-label="ci_{uid}"]');
     if (inp) {{
       var ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-      ns.call(inp, ox + ',' + oy);
+      ns.call(inp, val);
       inp.dispatchEvent(new Event('input', {{bubbles:true}}));
     }}
   }};
@@ -195,20 +183,20 @@ html,body{{margin:0;padding:0;background:#111;overflow:hidden}}
 </script>
 </body></html>"""
 
-    # Usiamo un counter per invalidare la key del text_input dopo ogni click
-    # così il valore non persiste tra rerun
-    counter_key = f"click_count_{uid}"
-    if counter_key not in st.session_state:
-        st.session_state[counter_key] = 0
-    input_key = f"ci_{uid}_{st.session_state[counter_key]}"
-
     st.components.v1.html(html, height=disp_h + 36, width=disp_w + 4, scrolling=False)
-    val = st.text_input(f"ci_{uid}", key=input_key, label_visibility="collapsed")
-    if val and "," in val:
+
+    # Leggi il valore. Formato: "x,y,timestamp"
+    # Il timestamp ci permette di sapere se è un click nuovo o vecchio
+    last_key = f"last_click_ts_{uid}"
+    val = st.text_input(f"ci_{uid}", key=f"ci_{uid}", label_visibility="collapsed")
+    if val and val.count(",") >= 2:
         try:
-            cx, cy = val.split(",")
-            st.session_state[counter_key] += 1  # invalida la key per il prossimo rerun
-            return {"x": int(cx), "y": int(cy)}
+            parts = val.split(",")
+            cx, cy, ts = int(parts[0]), int(parts[1]), parts[2]
+            # Solo se il timestamp è diverso dall'ultimo processato
+            if ts != ss.get(last_key):
+                ss[last_key] = ts
+                return {"x": cx, "y": cy}
         except:
             pass
     return None
