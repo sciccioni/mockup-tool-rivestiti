@@ -152,66 +152,90 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
 # ── Click canvas ───────────────────────────────────────────────────────────
 def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
     """
-    Shows image via st.image (full width, no iframe issues).
-    A transparent HTML overlay captures clicks and crosshair.
+    Renders image inside an HTML canvas — full width, click returns original px coords.
+    Image is embedded as base64 directly in the canvas so no iframe sizing issues.
     """
+    # Flatten transparency for display
+    display = img.copy()
+    if display.mode in ("RGBA", "LA", "P"):
+        bg = Image.new("RGB", display.size, (255, 255, 255))
+        if display.mode == "P":
+            display = display.convert("RGBA")
+        bg.paste(display, mask=display.split()[-1] if display.mode in ("RGBA","LA") else None)
+        display = bg
+    else:
+        display = display.convert("RGB")
+
     orig_w, orig_h = img.size
+    buf = io.BytesIO()
+    display.save(buf, format="JPEG", quality=92)
+    b64 = base64.b64encode(buf.getvalue()).decode()
 
-    # Show the actual image via st.image — full width, no iframe
-    st.image(img, use_container_width=True)
-
-    # Transparent click overlay — same aspect ratio, positioned over the image
-    aspect = orig_h / orig_w
-    # We use a % padding-bottom trick to match the image aspect ratio
     html = f"""
-<div id="wrap_{canvas_key}" style="position:relative;width:100%;padding-bottom:{aspect*100:.4f}%;margin-top:-8px;cursor:crosshair;">
-  <canvas id="cv_{canvas_key}"
-    style="position:absolute;top:0;left:0;width:100%;height:100%;border-radius:4px;">
-  </canvas>
+<style>
+  #wrap_{canvas_key} {{ position:relative; width:100%; line-height:0; }}
+  #wrap_{canvas_key} canvas {{ display:block; width:100%; cursor:crosshair; border-radius:6px; }}
+  #info_{canvas_key} {{ font-size:11px; color:#7c6fff; font-family:monospace; min-height:18px; padding:3px 0; }}
+</style>
+<div id="wrap_{canvas_key}">
+  <canvas id="cv_{canvas_key}"></canvas>
 </div>
-<div id="info_{canvas_key}" style="font-size:11px;color:#7c6fff;font-family:monospace;min-height:16px;margin-top:2px;"></div>
+<div id="info_{canvas_key}">👆 Clicca in alto a sinistra della copertina</div>
+
 <script>
 (function(){{
-  const wrap = document.getElementById('wrap_{canvas_key}');
   const cv   = document.getElementById('cv_{canvas_key}');
   const info = document.getElementById('info_{canvas_key}');
+  const ctx  = cv.getContext('2d');
   const OW = {orig_w}, OH = {orig_h};
 
-  function sync() {{
-    cv.width  = wrap.offsetWidth;
-    cv.height = wrap.offsetHeight;
-  }}
-  sync();
-  new ResizeObserver(sync).observe(wrap);
+  const imgEl = new Image();
+  imgEl.onload = function() {{
+    // Set canvas intrinsic size = original image size
+    cv.width  = OW;
+    cv.height = OH;
+    ctx.drawImage(imgEl, 0, 0, OW, OH);
+  }};
+  imgEl.src = 'data:image/jpeg;base64,{b64}';
 
   function toOrig(e) {{
-    const r = wrap.getBoundingClientRect();
+    const r = cv.getBoundingClientRect();
     return {{
       x: Math.round((e.clientX - r.left) / r.width  * OW),
       y: Math.round((e.clientY - r.top)  / r.height * OH)
     }};
   }}
 
-  wrap.addEventListener('mousemove', function(e) {{
+  cv.addEventListener('mousemove', function(e) {{
     const p = toOrig(e);
-    info.textContent = p.x + ' , ' + p.y + ' px';
-    const r = wrap.getBoundingClientRect();
-    const px = e.clientX - r.left, py = e.clientY - r.top;
-    const ctx = cv.getContext('2d');
-    ctx.clearRect(0,0,cv.width,cv.height);
-    ctx.strokeStyle = 'rgba(245,166,35,0.55)';
-    ctx.lineWidth = 1; ctx.setLineDash([4,3]);
-    ctx.beginPath(); ctx.moveTo(px,0); ctx.lineTo(px,cv.height); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0,py); ctx.lineTo(cv.width,py);  ctx.stroke();
+    info.textContent = '📍 ' + p.x + ' , ' + p.y + ' px';
+    // Redraw image + crosshair
+    ctx.drawImage(imgEl, 0, 0, OW, OH);
+    const r  = cv.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width  * OW;
+    const py = (e.clientY - r.top)  / r.height * OH;
+    ctx.strokeStyle = 'rgba(245,166,35,0.7)';
+    ctx.lineWidth = Math.max(1, OW/400);
+    ctx.setLineDash([8, 5]);
+    ctx.beginPath(); ctx.moveTo(px, 0);  ctx.lineTo(px, OH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, py);  ctx.lineTo(OW, py); ctx.stroke();
+    ctx.setLineDash([]);
   }});
 
-  wrap.addEventListener('mouseleave', function() {{
-    cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
-    info.textContent = '';
+  cv.addEventListener('mouseleave', function() {{
+    ctx.drawImage(imgEl, 0, 0, OW, OH);
+    info.textContent = '👆 Clicca in alto a sinistra della copertina';
   }});
 
-  wrap.addEventListener('click', function(e) {{
+  cv.addEventListener('click', function(e) {{
     const p = toOrig(e);
+    // Draw click marker
+    ctx.fillStyle = 'rgba(245,166,35,0.9)';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, Math.max(8, OW/60), 0, Math.PI*2);
+    ctx.fill();
+    info.textContent = '✅ Click: ' + p.x + ' , ' + p.y;
+
     const inputs = window.parent.document.querySelectorAll('input[type="text"]');
     for (const inp of inputs) {{
       if (inp.getAttribute('aria-label') === 'coord_input_{canvas_key}') {{
@@ -225,7 +249,9 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
 }})();
 </script>
 """
-    st.components.v1.html(html, height=60, scrolling=False)
+    # Height = canvas display height based on aspect ratio at ~780px wide
+    display_h = int(780 * orig_h / orig_w) + 40
+    st.components.v1.html(html, height=display_h, scrolling=False)
     coord_str = st.text_input("", key=f"coord_input_{canvas_key}",
                                label_visibility="collapsed",
                                placeholder="clicca sull'immagine…")
