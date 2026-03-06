@@ -79,7 +79,16 @@ def img_to_b64(img: Image.Image, max_w=1200) -> tuple:
     disp_w = min(orig_w, max_w)
     ratio = disp_w / orig_w
     disp_h = int(orig_h * ratio)
-    resized = img.resize((disp_w, disp_h), Image.LANCZOS).convert("RGB")
+    # Flatten transparency onto white background before JPEG encoding
+    resized = img.resize((disp_w, disp_h), Image.LANCZOS)
+    if resized.mode in ("RGBA", "LA", "P"):
+        bg = Image.new("RGB", resized.size, (255, 255, 255))
+        if resized.mode == "P":
+            resized = resized.convert("RGBA")
+        bg.paste(resized, mask=resized.split()[-1] if resized.mode in ("RGBA","LA") else None)
+        resized = bg
+    else:
+        resized = resized.convert("RGB")
     buf = io.BytesIO()
     resized.save(buf, format="JPEG", quality=92)
     b64 = base64.b64encode(buf.getvalue()).decode()
@@ -125,15 +134,19 @@ def draw_overlay(img: Image.Image, coords: dict | None, scale_pct: int, p1=None)
     return out
 
 def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_pct: int) -> Image.Image:
-    x,y,w,h = coords["x"],coords["y"],coords["width"],coords["height"]
+    x, y, w, h = coords["x"], coords["y"], coords["width"], coords["height"]
     sc = max(0.1, min(1.0, scale_pct/100))
     g = graphic.copy()
-    g.thumbnail((int(w*sc), int(h*sc)), Image.LANCZOS)
-    rw,rh = g.size
+    g.thumbnail((int(w * sc), int(h * sc)), Image.LANCZOS)
+    rw, rh = g.size
     result = template.copy().convert("RGB")
-    ox,oy = x+(w-rw)//2, y+(h-rh)//2
-    if g.mode=="RGBA": result.paste(g,(max(0,ox),max(0,oy)),g)
-    else: result.paste(g.convert("RGB"),(max(0,ox),max(0,oy)))
+    ox = x + (w - rw) // 2
+    oy = y + (h - rh) // 2
+    if g.mode == "RGBA":
+        result.paste(g, (ox, oy), g)
+    else:
+        mask = g.convert("L").point(lambda x: 255)
+        result.paste(g, (ox, oy), mask)
     return result
 
 # ── Click canvas ───────────────────────────────────────────────────────────
