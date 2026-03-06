@@ -194,7 +194,9 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
     if val and "," in val:
         try:
             cx,cy = val.split(",")
-            return {"x":int(cx),"y":int(cy)}
+            result = {"x":int(cx),"y":int(cy)}
+            st.markdown(f"<div style='background:#7c6fff;color:#fff;font-family:monospace;font-size:14px;font-weight:700;padding:8px 14px;border-radius:6px;display:inline-block'>📍 X: {result["x"]} px &nbsp;&nbsp; Y: {result["y"]} px</div>", unsafe_allow_html=True)
+            return result
         except: pass
     return None
 
@@ -472,4 +474,3 @@ elif ss.step == 4:
         st.download_button(f"⬇️ Scarica ZIP — {done} immagini",zip_buf.getvalue(),
                           "mockup-export.zip","application/zip",use_container_width=True,type="primary")
     if st.button("← Indietro", use_container_width=True): ss.step=3; st.rerun()
-
