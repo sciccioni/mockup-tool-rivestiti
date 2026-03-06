@@ -3,7 +3,6 @@ from PIL import Image, ImageDraw
 import numpy as np
 import zipfile, io, base64
 from pathlib import Path
-from streamlit_drawable_canvas import st_canvas
 
 st.set_page_config(
     page_title="Mockup Compositor · PhotoSì",
@@ -108,41 +107,87 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
 
 # ── Click canvas ───────────────────────────────────────────────────────────
 def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
-    """Uses streamlit-drawable-canvas — precise clicks, no offset issues."""
     flat = flatten(img)
     orig_w, orig_h = flat.size
     disp_h = height_px
     disp_w = int(orig_w * disp_h / orig_h)
-    bg = flat.resize((disp_w, disp_h), Image.LANCZOS)
+    resized = flat.resize((disp_w, disp_h), Image.LANCZOS)
+    buf = io.BytesIO()
+    resized.save(buf, format="JPEG", quality=90)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    uid = canvas_key.replace("-","_").replace(" ","_").replace(".","_")
 
-    canvas_result = st_canvas(
-        background_image=bg,
-        height=disp_h,
-        width=disp_w,
-        drawing_mode="point",
-        point_display_radius=6,
-        stroke_color="#f5a623",
-        key=canvas_key,
-        update_streamlit=True,
-    )
+    # KEY FIX: canvas pixel size == CSS size == no scaling distortion
+    # iframe width set to exact disp_w so no horizontal overflow
+    html = f"""<!DOCTYPE html>
+<html><head><style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#1a1a1e;width:{disp_w}px;overflow:hidden}}
+canvas{{display:block;cursor:crosshair}}
+#lbl{{font:700 14px monospace;color:#ffe033;background:#1a1a1e;
+      padding:5px 12px;min-height:26px;border-top:1px solid #333}}
+</style></head><body>
+<canvas id="c" width="{disp_w}" height="{disp_h}"></canvas>
+<div id="lbl">👆 muovi il mouse sull'immagine</div>
+<script>
+(function(){{
+const c=document.getElementById('c');
+const x=c.getContext('2d');
+const L=document.getElementById('lbl');
+const OW={orig_w},OH={orig_h},DW={disp_w},DH={disp_h};
+const im=new Image();
+im.onload=()=>x.drawImage(im,0,0,DW,DH);
+im.src='data:image/jpeg;base64,{b64}';
 
-    if canvas_result and canvas_result.json_data:
-        objs = canvas_result.json_data.get("objects", [])
-        if objs:
-            last = objs[-1]
-            cx = last.get("left", 0) + last.get("radius", 0)
-            cy = last.get("top", 0) + last.get("radius", 0)
-            ox = round(cx * orig_w / disp_w)
-            oy = round(cy * orig_h / disp_h)
-            st.markdown(
-                f"<div style='background:#1e1e22;border:2px solid #f5a623;border-radius:6px;"
-                f"padding:8px 16px;font-family:monospace;font-size:15px;font-weight:700;"
-                f"color:#f5a623;display:inline-block;margin:4px 0'>"
-                f"📍 X = {ox} &nbsp;&nbsp; Y = {oy}</div>",
-                unsafe_allow_html=True
-            )
-            return {"x": ox, "y": oy}
+function pos(e){{
+  // canvas CSS size == canvas pixel size, so no scaling needed
+  const r=c.getBoundingClientRect();
+  return[Math.round((e.clientX-r.left)*OW/DW),
+         Math.round((e.clientY-r.top)*OH/DH)];
+}}
+
+c.onmousemove=function(e){{
+  const[ox,oy]=pos(e);
+  const r=c.getBoundingClientRect();
+  const dx=e.clientX-r.left, dy=e.clientY-r.top;
+  x.drawImage(im,0,0,DW,DH);
+  x.strokeStyle='rgba(255,224,51,0.8)';x.lineWidth=1;x.setLineDash([5,4]);
+  x.beginPath();x.moveTo(dx,0);x.lineTo(dx,DH);x.stroke();
+  x.beginPath();x.moveTo(0,dy);x.lineTo(DW,dy);x.stroke();
+  x.setLineDash([]);
+  L.textContent='📍  X = '+ox+'   Y = '+oy;
+}};
+c.onmouseleave=function(){{
+  x.drawImage(im,0,0,DW,DH);
+  L.textContent='👆 muovi il mouse sull\'immagine';
+}};
+c.onclick=function(e){{
+  const[ox,oy]=pos(e);
+  const r=c.getBoundingClientRect();
+  const dx=e.clientX-r.left,dy=e.clientY-r.top;
+  x.drawImage(im,0,0,DW,DH);
+  x.fillStyle='rgba(255,100,50,0.9)';
+  x.beginPath();x.arc(dx,dy,9,0,Math.PI*2);x.fill();
+  L.textContent='✅  CLICK  X = '+ox+'   Y = '+oy;
+  const inp=window.parent.document.querySelector('input[aria-label="ci_{uid}"]');
+  if(inp){{
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')
+      .set.call(inp,ox+','+oy);
+    inp.dispatchEvent(new Event('input',{{bubbles:true}}));
+  }}
+}};
+}})();
+</script></body></html>"""
+
+    st.components.v1.html(html, height=disp_h+36, width=disp_w, scrolling=False)
+    val = st.text_input("", key=f"ci_{uid}", label_visibility="collapsed")
+    if val and "," in val:
+        try:
+            cx,cy = val.split(",")
+            return {"x":int(cx),"y":int(cy)}
+        except: pass
     return None
+
 
 # ══════════════════════════════════════════════════════════════════
 # STEP 1: UPLOAD TEMPLATES
