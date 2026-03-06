@@ -246,7 +246,6 @@ elif ss.step == 2:
                     det = auto_detect(tpls[0]["img"])
                     if det:
                         ss.default_coords[fmt] = det
-                        ss.calib_p1 = None
                         st.rerun()
                     else:
                         st.error("Non rilevato")
@@ -260,47 +259,44 @@ elif ss.step == 2:
                     if st.form_submit_button("💾 Salva default", use_container_width=True, type="primary"):
                         ss.default_coords[fmt] = {"x":dx,"y":dy,"width":dw,"height":dh}
                         ss.default_scale[fmt] = new_scale
-                        ss.calib_p1 = None
                         st.rerun()
 
                 if def_coords:
-                    st.markdown(f"""
-<div style='background:#1e1e22;border:1px solid #3ecf8e;border-radius:8px;padding:10px 14px;font-family:monospace;font-size:13px;line-height:2'>
-  <span style='color:#3ecf8e;font-weight:700'>✅ Calibrato</span><br/>
-  <span style='color:#a89eff'>X</span> <span style='color:#fff;font-weight:600'>{def_coords['x']}</span>
-  &nbsp;&nbsp;
-  <span style='color:#a89eff'>Y</span> <span style='color:#fff;font-weight:600'>{def_coords['y']}</span><br/>
-  <span style='color:#a89eff'>W</span> <span style='color:#fff;font-weight:600'>{def_coords['width']}</span>
-  &nbsp;&nbsp;
-  <span style='color:#a89eff'>H</span> <span style='color:#fff;font-weight:600'>{def_coords['height']}</span><br/>
-  <span style='color:#a89eff'>Scala</span> <span style='color:#f5a623;font-weight:600'>{new_scale}%</span>
-</div>
-""", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='background:#1e1e22;border:2px solid #3ecf8e;border-radius:8px;"
+                        f"padding:10px 14px;font-family:monospace;font-size:13px;line-height:2'>"
+                        f"<span style='color:#3ecf8e;font-weight:700'>✅ Calibrato</span><br/>"
+                        f"<span style='color:#a89eff'>X</span> <span style='color:#fff;font-weight:600'>{def_coords['x']}</span> &nbsp;&nbsp;"
+                        f"<span style='color:#a89eff'>Y</span> <span style='color:#fff;font-weight:600'>{def_coords['y']}</span><br/>"
+                        f"<span style='color:#a89eff'>W</span> <span style='color:#fff;font-weight:600'>{def_coords['width']}</span> &nbsp;&nbsp;"
+                        f"<span style='color:#a89eff'>H</span> <span style='color:#fff;font-weight:600'>{def_coords['height']}</span><br/>"
+                        f"<span style='color:#a89eff'>Scala</span> <span style='color:#f5a623;font-weight:600'>{new_scale}%</span>"
+                        f"</div>", unsafe_allow_html=True)
 
-                # P1 status
-                ck = f"def_{fmt}"
-                if ss.calib_p1 and ss.calib_key == ck:
-                    st.warning(f"P1: {ss.calib_p1['x']},{ss.calib_p1['y']}\n→ clicca in basso a destra")
+                # P1 state is keyed per canvas — use f"p1_{fmt}" as key
+                p1_key = f"p1_def_{fmt}"
+                if ss.get(p1_key):
+                    st.warning(f"P1: {ss[p1_key]['x']},{ss[p1_key]['y']} → clicca in basso a destra")
                     if st.button("✕ Annulla", key=f"canc_{fmt}"):
-                        ss.calib_p1=None; ss.calib_key=None; st.rerun()
+                        ss[p1_key] = None; st.rerun()
                 else:
-                    st.info("👆 Clicca P1 (alto sx) poi P2 (basso dx) sull'immagine")
+                    st.caption("👆 Click P1 alto-sx → P2 basso-dx")
 
             with col_img:
-                p1_show = ss.calib_p1 if ss.calib_key == f"def_{fmt}" else None
+                p1_show = ss.get(f"p1_def_{fmt}")
                 overlay = draw_overlay(tpls[0]["img"], def_coords, new_scale, p1_show)
                 click = click_canvas(overlay, f"def_{fmt}", height_px=380)
                 if click:
-                    ck = f"def_{fmt}"
-                    if ss.calib_p1 is None or ss.calib_key != ck:
-                        ss.calib_p1 = click; ss.calib_key = ck; st.rerun()
+                    p1_key = f"p1_def_{fmt}"
+                    if not ss.get(p1_key):
+                        ss[p1_key] = click; st.rerun()
                     else:
-                        p1 = ss.calib_p1
-                        x=min(p1["x"],click["x"]); y=min(p1["y"],click["y"])
-                        w=abs(click["x"]-p1["x"]); h=abs(click["y"]-p1["y"])
-                        if w>10 and h>10:
-                            ss.default_coords[fmt]={"x":x,"y":y,"width":w,"height":h}
-                        ss.calib_p1=None; ss.calib_key=None; st.rerun()
+                        p1 = ss[p1_key]
+                        x = min(p1["x"], click["x"]); y = min(p1["y"], click["y"])
+                        w = abs(click["x"]-p1["x"]); h = abs(click["y"]-p1["y"])
+                        if w > 10 and h > 10:
+                            ss.default_coords[fmt] = {"x":x,"y":y,"width":w,"height":h}
+                        ss[p1_key] = None; st.rerun()
 
             # Per-template overrides
             st.markdown("---")
@@ -344,22 +340,23 @@ elif ss.step == 2:
 
                 with ocol2:
                     ovck = f"ov_{fmt}_{sel_name}"
-                    p1_ov = ss.calib_p1 if ss.calib_key==ovck else None
+                    p1_ov_key = f"p1_{ovck}"
+                    p1_ov = ss.get(p1_ov_key)
                     ov_overlay = draw_overlay(sel_tpl["img"], ov_coords, nov_scale, p1_ov)
                     click2 = click_canvas(ov_overlay, ovck, height_px=320)
                     if click2:
-                        if ss.calib_p1 is None or ss.calib_key!=ovck:
-                            ss.calib_p1=click2; ss.calib_key=ovck; st.rerun()
+                        if not ss.get(p1_ov_key):
+                            ss[p1_ov_key] = click2; st.rerun()
                         else:
-                            p1=ss.calib_p1
-                            x=min(p1["x"],click2["x"]); y=min(p1["y"],click2["y"])
-                            w=abs(click2["x"]-p1["x"]); h=abs(click2["y"]-p1["y"])
+                            p1 = ss[p1_ov_key]
+                            x = min(p1["x"],click2["x"]); y = min(p1["y"],click2["y"])
+                            w = abs(click2["x"]-p1["x"]); h = abs(click2["y"]-p1["y"])
                             if w>10 and h>10:
                                 if fmt not in ss.tpl_coords: ss.tpl_coords[fmt]={}
                                 ss.tpl_coords[fmt][sel_name]={"x":x,"y":y,"width":w,"height":h}
                                 if fmt not in ss.tpl_scale: ss.tpl_scale[fmt]={}
                                 ss.tpl_scale[fmt][sel_name]=nov_scale
-                            ss.calib_p1=None; ss.calib_key=None; st.rerun()
+                            ss[p1_ov_key]=None; st.rerun()
 
     st.markdown("---")
     c1,c2=st.columns(2)
