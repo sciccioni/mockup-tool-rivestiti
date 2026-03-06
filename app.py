@@ -1,7 +1,7 @@
 import streamlit as st
 from PIL import Image, ImageDraw, ImageOps
 import numpy as np
-import zipfile, io
+import zipfile, io, re
 from pathlib import Path
 
 st.set_page_config(
@@ -24,9 +24,21 @@ h1,h2,h3 { color:#e4e4ec !important; }
 
 FORMATS = ["Orizzontale", "Quadrato", "Verticali"]
 
+# Keyword → sotto-tipo. Ordine conta: primo match vince.
+SUBTYPE_KEYWORDS = [
+    ("gallery", "gallery"),
+    ("printbox", "printbox"),
+    ("app", "printbox"),       # "app_printbox" contiene "app"
+]
+DEFAULT_SUBTYPE = "gallery"    # fallback se nessun keyword matcha
+
 for k, v in {
-    "templates": {}, "default_coords": {}, "default_scale": {},
-    "tpl_coords": {}, "tpl_scale": {}, "graphics": [], "step": 1,
+    "templates": {},       # {fmt: [{"name":..,"img":..,"ext":..,"subtype":..}]}
+    "sub_coords": {},      # {f"{fmt}|{subtype}": {"x":..,"y":..,"width":..,"height":..}}
+    "sub_scale": {},       # {f"{fmt}|{subtype}": int}
+    "tpl_coords": {},      # {fmt: {tpl_name: coords}} per override singolo
+    "tpl_scale": {},       # {fmt: {tpl_name: scale}}
+    "graphics": [], "step": 1,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -41,17 +53,31 @@ def flatten(img: Image.Image) -> Image.Image:
         return bg
     return img.convert("RGB")
 
-def get_coords(fmt, tpl_name):
+def detect_subtype(filename: str) -> str:
+    """Rileva sotto-tipo dal nome file."""
+    low = filename.lower()
+    for keyword, subtype in SUBTYPE_KEYWORDS:
+        if keyword in low:
+            return subtype
+    return DEFAULT_SUBTYPE
+
+def sub_key(fmt: str, subtype: str) -> str:
+    return f"{fmt}|{subtype}"
+
+def get_coords(fmt, tpl_name, subtype):
+    """Cerca coordinate: override template → default sotto-tipo."""
     ov = ss.tpl_coords.get(fmt, {}).get(tpl_name)
     if ov: return ov, "custom"
-    df = ss.default_coords.get(fmt)
+    sk = sub_key(fmt, subtype)
+    df = ss.sub_coords.get(sk)
     if df: return df, "default"
     return None, None
 
-def get_scale(fmt, tpl_name):
+def get_scale(fmt, tpl_name, subtype):
     ov = ss.tpl_scale.get(fmt, {}).get(tpl_name)
     if ov is not None: return ov, "custom"
-    return ss.default_scale.get(fmt, 90), "default"
+    sk = sub_key(fmt, subtype)
+    return ss.sub_scale.get(sk, 90), "default"
 
 def auto_detect(img: Image.Image):
     try:
@@ -110,6 +136,11 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
         result.paste(g,(max(0,ox),max(0,oy)),mask)
     return result
 
+def get_subtypes(tpls):
+    """Ritorna set ordinato dei sotto-tipi presenti nella lista template."""
+    subs = sorted(set(t["subtype"] for t in tpls))
+    return subs
+
 
 # ══════════════════════════════════════════════════════════════════
 # STEP 1: UPLOAD TEMPLATES
@@ -123,20 +154,38 @@ if ss.step == 1:
                                      accept_multiple_files=True, key=f"up_{fmt}",
                                      label_visibility="collapsed")
             if files:
-                ss.templates[fmt] = [{"name":Path(f.name).stem,"img":ImageOps.exif_transpose(Image.open(f)),"ext":Path(f.name).suffix.lower()} for f in files]
-                st.success(f"✓ {len(files)}")
-                tcols = st.columns(min(3,len(files)))
-                for i,t in enumerate(ss.templates[fmt][:6]):
-                    with tcols[i%3]: st.image(flatten(t["img"]), caption=t["name"][:14], width=80)
+                tpls = []
+                for f in files:
+                    sub = detect_subtype(f.name)
+                    tpls.append({
+                        "name": Path(f.name).stem,
+                        "img": ImageOps.exif_transpose(Image.open(f)),
+                        "ext": Path(f.name).suffix.lower(),
+                        "subtype": sub,
+                    })
+                ss.templates[fmt] = tpls
+                # Mostra raggruppati per sotto-tipo
+                subs = get_subtypes(tpls)
+                for sub in subs:
+                    sub_tpls = [t for t in tpls if t["subtype"] == sub]
+                    st.success(f"✓ {len(sub_tpls)} × {sub}")
+                    tcols = st.columns(min(3, len(sub_tpls)))
+                    for i, t in enumerate(sub_tpls[:6]):
+                        with tcols[i % 3]:
+                            st.image(flatten(t["img"]), caption=t["name"][:14], width=80)
             elif fmt in ss.templates and ss.templates[fmt]:
-                st.info(f"✓ {len(ss.templates[fmt])} caricati")
+                tpls = ss.templates[fmt]
+                subs = get_subtypes(tpls)
+                for sub in subs:
+                    cnt = sum(1 for t in tpls if t["subtype"] == sub)
+                    st.info(f"✓ {cnt} × {sub}")
     st.markdown("---")
     if sum(len(v) for v in ss.templates.values()) > 0:
         if st.button("Avanti → Calibra 🎯", type="primary", use_container_width=True):
             ss.step=2; st.rerun()
 
 # ══════════════════════════════════════════════════════════════════
-# STEP 2: CALIBRATE (Auto-detect + Form manuale + Preview)
+# STEP 2: CALIBRATE — per formato × sotto-tipo
 # ══════════════════════════════════════════════════════════════════
 elif ss.step == 2:
     st.markdown("## 🎯 Step 2 — Calibra le Zone")
@@ -146,104 +195,117 @@ elif ss.step == 2:
     for tab, fmt in zip(fmt_tabs, fmt_list):
         with tab:
             tpls = ss.templates[fmt]
-            def_coords = ss.default_coords.get(fmt)
-            def_scale  = ss.default_scale.get(fmt, 90)
+            subs = get_subtypes(tpls)
 
-            st.markdown(f"#### Default per {fmt}")
-            col_cfg, col_img = st.columns([1, 2])
+            # Tab interno per sotto-tipo
+            if len(subs) > 1:
+                sub_tabs = st.tabs([f"📦 {s.upper()}" for s in subs])
+            else:
+                sub_tabs = [tab]  # usa il tab corrente
 
-            with col_cfg:
-                new_scale = st.slider("Scala %", 10, 100, def_scale, key=f"dsc_{fmt}")
-                ss.default_scale[fmt] = new_scale
+            for stab, sub in zip(sub_tabs, subs):
+                with stab:
+                    sk = sub_key(fmt, sub)
+                    sub_tpls = [t for t in tpls if t["subtype"] == sub]
+                    def_coords = ss.sub_coords.get(sk)
+                    def_scale = ss.sub_scale.get(sk, 90)
 
-                if st.button("🔍 Auto-detect", key=f"dad_{fmt}", use_container_width=True):
-                    det = auto_detect(tpls[0]["img"])
-                    if det:
-                        ss.default_coords[fmt] = det
-                        st.rerun()
-                    else:
-                        st.error("Non rilevato")
+                    st.markdown(f"#### {fmt} · {sub.upper()} ({len(sub_tpls)} template)")
+                    col_cfg, col_img = st.columns([1, 2])
 
-                with st.form(key=f"dform_{fmt}"):
-                    dc = def_coords or {}
-                    dx = st.number_input("X", value=dc.get("x",0), min_value=0, step=1)
-                    dy = st.number_input("Y", value=dc.get("y",0), min_value=0, step=1)
-                    dw = st.number_input("W", value=dc.get("width",800), min_value=1, step=1)
-                    dh = st.number_input("H", value=dc.get("height",600), min_value=1, step=1)
-                    if st.form_submit_button("💾 Salva default", use_container_width=True, type="primary"):
-                        ss.default_coords[fmt] = {"x":dx,"y":dy,"width":dw,"height":dh}
-                        ss.default_scale[fmt] = new_scale
-                        st.rerun()
+                    with col_cfg:
+                        new_scale = st.slider("Scala %", 10, 100, def_scale, key=f"dsc_{sk}")
+                        ss.sub_scale[sk] = new_scale
 
-                if def_coords:
-                    st.markdown(
-                        f"<div style='background:#1e1e22;border:2px solid #3ecf8e;border-radius:8px;"
-                        f"padding:10px 14px;font-family:monospace;font-size:13px;line-height:2'>"
-                        f"<span style='color:#3ecf8e;font-weight:700'>✅ Calibrato</span><br/>"
-                        f"<span style='color:#a89eff'>X</span> <span style='color:#fff;font-weight:600'>{def_coords['x']}</span> &nbsp;&nbsp;"
-                        f"<span style='color:#a89eff'>Y</span> <span style='color:#fff;font-weight:600'>{def_coords['y']}</span><br/>"
-                        f"<span style='color:#a89eff'>W</span> <span style='color:#fff;font-weight:600'>{def_coords['width']}</span> &nbsp;&nbsp;"
-                        f"<span style='color:#a89eff'>H</span> <span style='color:#fff;font-weight:600'>{def_coords['height']}</span><br/>"
-                        f"<span style='color:#a89eff'>Scala</span> <span style='color:#f5a623;font-weight:600'>{new_scale}%</span>"
-                        f"</div>", unsafe_allow_html=True)
-
-            with col_img:
-                overlay = draw_overlay(tpls[0]["img"], def_coords, new_scale)
-                st.image(overlay, use_container_width=True)
-                if def_coords:
-                    ow, oh = tpls[0]["img"].size
-                    st.caption(f"Template: {ow}×{oh}px — Zona: ({def_coords['x']},{def_coords['y']}) → ({def_coords['x']+def_coords['width']},{def_coords['y']+def_coords['height']})")
-
-            # Per-template overrides
-            st.markdown("---")
-            with st.expander(f"⚙️ Override per singolo template"):
-                tpl_names = [t["name"] for t in tpls]
-                sel_name = st.selectbox("Template", tpl_names, key=f"osel_{fmt}")
-                sel_tpl  = next(t for t in tpls if t["name"]==sel_name)
-                ov_coords, ov_src = get_coords(fmt, sel_name)
-                ov_scale, _ = get_scale(fmt, sel_name)
-
-                st.caption(f"Sorgente: {'🟢 custom' if ov_src=='custom' else '🔵 default formato'}")
-
-                ocol1, ocol2 = st.columns([1,2])
-                with ocol1:
-                    nov_scale = st.slider("Scala %", 10, 100, ov_scale, key=f"ovsc_{fmt}_{sel_name}")
-                    if st.button("🔍 Auto-detect", key=f"ovad_{fmt}_{sel_name}", use_container_width=True):
-                        det = auto_detect(sel_tpl["img"])
-                        if det:
-                            if fmt not in ss.tpl_coords: ss.tpl_coords[fmt]={}
-                            ss.tpl_coords[fmt][sel_name]=det
-                            st.rerun()
-                    with st.form(key=f"ovform_{fmt}_{sel_name}"):
-                        oc = ov_coords or {}
-                        ox2=st.number_input("X",value=oc.get("x",0),min_value=0,step=1)
-                        oy2=st.number_input("Y",value=oc.get("y",0),min_value=0,step=1)
-                        ow2=st.number_input("W",value=oc.get("width",800),min_value=1,step=1)
-                        oh2=st.number_input("H",value=oc.get("height",600),min_value=1,step=1)
-                        c1,c2=st.columns(2)
-                        with c1:
-                            if st.form_submit_button("💾 Salva", use_container_width=True, type="primary"):
-                                if fmt not in ss.tpl_coords: ss.tpl_coords[fmt]={}
-                                ss.tpl_coords[fmt][sel_name]={"x":ox2,"y":oy2,"width":ow2,"height":oh2}
-                                if fmt not in ss.tpl_scale: ss.tpl_scale[fmt]={}
-                                ss.tpl_scale[fmt][sel_name]=nov_scale
+                        if st.button("🔍 Auto-detect", key=f"dad_{sk}", use_container_width=True):
+                            det = auto_detect(sub_tpls[0]["img"])
+                            if det:
+                                ss.sub_coords[sk] = det
                                 st.rerun()
-                        with c2:
-                            if st.form_submit_button("🗑️ Reset", use_container_width=True):
-                                ss.tpl_coords.get(fmt,{}).pop(sel_name,None)
-                                ss.tpl_scale.get(fmt,{}).pop(sel_name,None)
+                            else:
+                                st.error("Non rilevato")
+
+                        with st.form(key=f"dform_{sk}"):
+                            dc = def_coords or {}
+                            dx = st.number_input("X", value=dc.get("x",0), min_value=0, step=1)
+                            dy = st.number_input("Y", value=dc.get("y",0), min_value=0, step=1)
+                            dw = st.number_input("W", value=dc.get("width",800), min_value=1, step=1)
+                            dh = st.number_input("H", value=dc.get("height",600), min_value=1, step=1)
+                            if st.form_submit_button("💾 Salva default", use_container_width=True, type="primary"):
+                                ss.sub_coords[sk] = {"x":dx,"y":dy,"width":dw,"height":dh}
+                                ss.sub_scale[sk] = new_scale
                                 st.rerun()
 
-                with ocol2:
-                    ov_overlay = draw_overlay(sel_tpl["img"], ov_coords, nov_scale)
-                    st.image(ov_overlay, use_container_width=True)
+                        if def_coords:
+                            st.markdown(
+                                f"<div style='background:#1e1e22;border:2px solid #3ecf8e;border-radius:8px;"
+                                f"padding:10px 14px;font-family:monospace;font-size:13px;line-height:2'>"
+                                f"<span style='color:#3ecf8e;font-weight:700'>✅ {sub.upper()}</span><br/>"
+                                f"<span style='color:#a89eff'>X</span> <span style='color:#fff;font-weight:600'>{def_coords['x']}</span> &nbsp;&nbsp;"
+                                f"<span style='color:#a89eff'>Y</span> <span style='color:#fff;font-weight:600'>{def_coords['y']}</span><br/>"
+                                f"<span style='color:#a89eff'>W</span> <span style='color:#fff;font-weight:600'>{def_coords['width']}</span> &nbsp;&nbsp;"
+                                f"<span style='color:#a89eff'>H</span> <span style='color:#fff;font-weight:600'>{def_coords['height']}</span><br/>"
+                                f"<span style='color:#a89eff'>Scala</span> <span style='color:#f5a623;font-weight:600'>{new_scale}%</span>"
+                                f"</div>", unsafe_allow_html=True)
+
+                    with col_img:
+                        overlay = draw_overlay(sub_tpls[0]["img"], def_coords, new_scale)
+                        st.image(overlay, use_container_width=True)
+                        if def_coords:
+                            ow, oh = sub_tpls[0]["img"].size
+                            st.caption(f"Template: {ow}×{oh}px — Zona: ({def_coords['x']},{def_coords['y']}) → ({def_coords['x']+def_coords['width']},{def_coords['y']+def_coords['height']})")
+
+                    # Override per singolo template
+                    st.markdown("---")
+                    with st.expander(f"⚙️ Override per singolo template ({sub})"):
+                        tpl_names = [t["name"] for t in sub_tpls]
+                        sel_name = st.selectbox("Template", tpl_names, key=f"osel_{sk}")
+                        sel_tpl = next(t for t in sub_tpls if t["name"] == sel_name)
+                        ov_coords, ov_src = get_coords(fmt, sel_name, sub)
+                        ov_scale, _ = get_scale(fmt, sel_name, sub)
+
+                        st.caption(f"Sorgente: {'🟢 custom' if ov_src=='custom' else '🔵 default ' + sub}")
+
+                        ocol1, ocol2 = st.columns([1, 2])
+                        with ocol1:
+                            nov_scale = st.slider("Scala %", 10, 100, ov_scale, key=f"ovsc_{sk}_{sel_name}")
+                            if st.button("🔍 Auto-detect", key=f"ovad_{sk}_{sel_name}", use_container_width=True):
+                                det = auto_detect(sel_tpl["img"])
+                                if det:
+                                    if fmt not in ss.tpl_coords: ss.tpl_coords[fmt] = {}
+                                    ss.tpl_coords[fmt][sel_name] = det
+                                    st.rerun()
+                            with st.form(key=f"ovform_{sk}_{sel_name}"):
+                                oc = ov_coords or {}
+                                ox2 = st.number_input("X", value=oc.get("x",0), min_value=0, step=1)
+                                oy2 = st.number_input("Y", value=oc.get("y",0), min_value=0, step=1)
+                                ow2 = st.number_input("W", value=oc.get("width",800), min_value=1, step=1)
+                                oh2 = st.number_input("H", value=oc.get("height",600), min_value=1, step=1)
+                                c1, c2 = st.columns(2)
+                                with c1:
+                                    if st.form_submit_button("💾 Salva", use_container_width=True, type="primary"):
+                                        if fmt not in ss.tpl_coords: ss.tpl_coords[fmt] = {}
+                                        ss.tpl_coords[fmt][sel_name] = {"x":ox2,"y":oy2,"width":ow2,"height":oh2}
+                                        if fmt not in ss.tpl_scale: ss.tpl_scale[fmt] = {}
+                                        ss.tpl_scale[fmt][sel_name] = nov_scale
+                                        st.rerun()
+                                with c2:
+                                    if st.form_submit_button("🗑️ Reset", use_container_width=True):
+                                        ss.tpl_coords.get(fmt, {}).pop(sel_name, None)
+                                        ss.tpl_scale.get(fmt, {}).pop(sel_name, None)
+                                        st.rerun()
+
+                        with ocol2:
+                            ov_overlay = draw_overlay(sel_tpl["img"], ov_coords, nov_scale)
+                            st.image(ov_overlay, use_container_width=True)
 
     st.markdown("---")
-    c1,c2=st.columns(2)
+    c1, c2 = st.columns(2)
     with c1:
         if st.button("← Indietro", use_container_width=True): ss.step=1; st.rerun()
     with c2:
-        if ss.default_coords or any(ss.tpl_coords.values()):
+        has_any = any(ss.sub_coords.values()) or any(ss.tpl_coords.values())
+        if has_any:
             if st.button("Avanti → Grafiche 🎨", type="primary", use_container_width=True): ss.step=3; st.rerun()
         else:
             st.button("Calibra almeno un formato", disabled=True, use_container_width=True)
@@ -256,31 +318,40 @@ elif ss.step == 3:
     uploaded = st.file_uploader("Carica grafiche", type=["jpg","jpeg","png","webp"],
                                 accept_multiple_files=True, label_visibility="collapsed")
     if uploaded:
-        ss.graphics=[{"name":Path(f.name).stem,"img":ImageOps.exif_transpose(Image.open(f)),"ext":Path(f.name).suffix.lower()} for f in uploaded]
+        ss.graphics = [{"name":Path(f.name).stem,"img":ImageOps.exif_transpose(Image.open(f)),"ext":Path(f.name).suffix.lower()} for f in uploaded]
     elif ss.graphics:
         st.info(f"✓ {len(ss.graphics)} già caricate")
     if ss.graphics:
-        gcols=st.columns(min(5,len(ss.graphics)))
-        for i,g in enumerate(ss.graphics):
-            with gcols[i%5]: st.image(flatten(g["img"]), caption=g["name"][:12], width=90)
-        if ss.default_coords or ss.tpl_coords:
+        gcols = st.columns(min(5, len(ss.graphics)))
+        for i, g in enumerate(ss.graphics):
+            with gcols[i % 5]: st.image(flatten(g["img"]), caption=g["name"][:12], width=90)
+        if ss.sub_coords or ss.tpl_coords:
             st.markdown("---")
             st.markdown("**👁️ Quick Preview**")
-            pc1,pc2,pc3=st.columns(3)
-            with pc1: pg=st.selectbox("Grafica",[g["name"] for g in ss.graphics])
+            pc1, pc2, pc3 = st.columns(3)
+            with pc1: pg = st.selectbox("Grafica", [g["name"] for g in ss.graphics])
             with pc2:
-                avail=[f for f in ss.templates if ss.default_coords.get(f) or ss.tpl_coords.get(f)]
-                pf=st.selectbox("Formato",avail) if avail else None
+                # Tutti i formati che hanno almeno un sotto-tipo calibrato
+                avail = []
+                for f in FORMATS:
+                    if f not in ss.templates: continue
+                    for t in ss.templates[f]:
+                        coords, _ = get_coords(f, t["name"], t["subtype"])
+                        if coords:
+                            if f not in avail: avail.append(f)
+                            break
+                pf = st.selectbox("Formato", avail) if avail else None
             with pc3:
-                pt=st.selectbox("Template",[t["name"] for t in ss.templates.get(pf,[])]) if pf else None
+                pt = st.selectbox("Template", [t["name"] for t in ss.templates.get(pf, [])]) if pf else None
             if pf and pt and st.button("Genera preview"):
-                go=next(g for g in ss.graphics if g["name"]==pg)
-                to=next(t for t in ss.templates[pf] if t["name"]==pt)
-                coords,_=get_coords(pf,pt); scale,_=get_scale(pf,pt)
+                go = next(g for g in ss.graphics if g["name"] == pg)
+                to = next(t for t in ss.templates[pf] if t["name"] == pt)
+                coords, _ = get_coords(pf, pt, to["subtype"])
+                scale, _ = get_scale(pf, pt, to["subtype"])
                 if coords:
-                    st.image(composite(go["img"],to["img"],coords,scale), use_container_width=True)
+                    st.image(composite(go["img"], to["img"], coords, scale), use_container_width=True)
     st.markdown("---")
-    c1,c2=st.columns(2)
+    c1, c2 = st.columns(2)
     with c1:
         if st.button("← Indietro", use_container_width=True): ss.step=2; st.rerun()
     with c2:
@@ -292,45 +363,45 @@ elif ss.step == 3:
 # ══════════════════════════════════════════════════════════════════
 elif ss.step == 4:
     st.markdown("## 📦 Step 4 — Esporta ZIP")
-    all_jobs=[]
-    for fmt,tpls in ss.templates.items():
+    all_jobs = []
+    for fmt, tpls in ss.templates.items():
         for tpl in tpls:
-            coords,src=get_coords(fmt,tpl["name"])
-            scale,_=get_scale(fmt,tpl["name"])
-            all_jobs.append({"fmt":fmt,"tpl":tpl,"coords":coords,"scale":scale})
-    valid=[j for j in all_jobs if j["coords"]]
-    c1,c2,c3,c4=st.columns(4)
-    c1.metric("🎨 Grafiche",len(ss.graphics))
-    c2.metric("🖼️ Template validi",len(valid))
-    c3.metric("❌ Senza coords",len(all_jobs)-len(valid))
-    c4.metric("📁 Tot.",len(ss.graphics)*len(valid))
+            coords, src = get_coords(fmt, tpl["name"], tpl["subtype"])
+            scale, _ = get_scale(fmt, tpl["name"], tpl["subtype"])
+            all_jobs.append({"fmt":fmt, "tpl":tpl, "coords":coords, "scale":scale})
+    valid = [j for j in all_jobs if j["coords"]]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🎨 Grafiche", len(ss.graphics))
+    c2.metric("🖼️ Template validi", len(valid))
+    c3.metric("❌ Senza coords", len(all_jobs) - len(valid))
+    c4.metric("📁 Tot.", len(ss.graphics) * len(valid))
     st.markdown("---")
-    gcols=st.columns(min(5,len(ss.graphics)))
-    gsel={}
-    for i,g in enumerate(ss.graphics):
-        with gcols[i%5]:
-            st.image(flatten(g["img"]),width=80)
-            gsel[g["name"]]=st.checkbox(g["name"][:12],value=True,key=f"gs_{i}")
-    sel_g=[g for g in ss.graphics if gsel.get(g["name"],True)]
+    gcols = st.columns(min(5, len(ss.graphics)))
+    gsel = {}
+    for i, g in enumerate(ss.graphics):
+        with gcols[i % 5]:
+            st.image(flatten(g["img"]), width=80)
+            gsel[g["name"]] = st.checkbox(g["name"][:12], value=True, key=f"gs_{i}")
+    sel_g = [g for g in ss.graphics if gsel.get(g["name"], True)]
     st.markdown("---")
-    n=len(sel_g)*len(valid)
+    n = len(sel_g) * len(valid)
     if st.button(f"🚀 Genera {n} immagini → ZIP", type="primary", use_container_width=True, disabled=n==0):
-        prog=st.progress(0,text="Avvio...")
-        zip_buf=io.BytesIO(); done,errors=0,[]
-        with zipfile.ZipFile(zip_buf,"w",zipfile.ZIP_DEFLATED) as zf:
+        prog = st.progress(0, text="Avvio...")
+        zip_buf = io.BytesIO(); done, errors = 0, []
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for g in sel_g:
                 for job in valid:
-                    prog.progress(done/n, text=f"⚙️ {g['name']} → {job['fmt']}/{job['tpl']['name']}")
+                    prog.progress(done / n, text=f"⚙️ {g['name']} → {job['fmt']}/{job['tpl']['subtype']}/{job['tpl']['name']}")
                     try:
-                        res=composite(g["img"],job["tpl"]["img"],job["coords"],job["scale"])
-                        buf=io.BytesIO()
-                        res.save(buf,format="PNG" if g["ext"]==".png" else "JPEG",quality=92)
-                        zf.writestr(f"{g['name']}/{job['fmt']}/{job['tpl']['name']}{g['ext'] or '.jpg'}",buf.getvalue())
+                        res = composite(g["img"], job["tpl"]["img"], job["coords"], job["scale"])
+                        buf = io.BytesIO()
+                        res.save(buf, format="PNG" if g["ext"]==".png" else "JPEG", quality=92)
+                        zf.writestr(f"{g['name']}/{job['fmt']}/{job['tpl']['subtype']}/{job['tpl']['name']}{g['ext'] or '.jpg'}", buf.getvalue())
                     except Exception as e: errors.append(str(e))
-                    done+=1
-        prog.progress(1.0,text="✅ Completato!")
+                    done += 1
+        prog.progress(1.0, text="✅ Completato!")
         if errors:
             with st.expander(f"⚠️ {len(errors)} errori"): [st.text(e) for e in errors]
-        st.download_button(f"⬇️ Scarica ZIP — {done} immagini",zip_buf.getvalue(),
-                          "mockup-export.zip","application/zip",use_container_width=True,type="primary")
+        st.download_button(f"⬇️ Scarica ZIP — {done} immagini", zip_buf.getvalue(),
+                          "mockup-export.zip", "application/zip", use_container_width=True, type="primary")
     if st.button("← Indietro", use_container_width=True): ss.step=3; st.rerun()
