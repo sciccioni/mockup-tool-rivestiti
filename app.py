@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 import json, zipfile, io, base64
 from pathlib import Path
+from streamlit_image_coordinates import streamlit_image_coordinates
 
 st.set_page_config(
     page_title="Mockup Compositor · PhotoSì",
@@ -151,11 +152,9 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
 
 # ── Click canvas ───────────────────────────────────────────────────────────
 def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
-    """
-    Renders image inside an HTML canvas — full width, click returns original px coords.
-    Image is embedded as base64 directly in the canvas so no iframe sizing issues.
-    """
-    # Flatten transparency for display
+    """Uses streamlit-image-coordinates for native click detection."""
+    orig_w, orig_h = img.size
+    # Flatten transparency
     display = img.copy()
     if display.mode in ("RGBA", "LA", "P"):
         bg = Image.new("RGB", display.size, (255, 255, 255))
@@ -166,108 +165,14 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
     else:
         display = display.convert("RGB")
 
-    orig_w, orig_h = img.size
-    buf = io.BytesIO()
-    display.save(buf, format="JPEG", quality=92)
-    b64 = base64.b64encode(buf.getvalue()).decode()
-
-    html = f"""
-<style>
-  body {{ margin:0; padding:0; background:transparent; overflow:hidden; }}
-  #cv_{canvas_key} {{ display:block; cursor:crosshair; border-radius:6px; background:#fff; max-width:100%; }}
-  #info_{canvas_key} {{ font-size:11px; color:#7c6fff; font-family:monospace; min-height:18px; padding:3px 0; }}
-</style>
-<canvas id="cv_{canvas_key}"></canvas>
-<div id="info_{canvas_key}">👆 Clicca in alto a sinistra della copertina</div>
-
-<script>
-(function(){{
-  const cv   = document.getElementById('cv_{canvas_key}');
-  const info = document.getElementById('info_{canvas_key}');
-  const ctx  = cv.getContext('2d');
-  const OW = {orig_w}, OH = {orig_h};
-
-  const imgEl = new Image();
-  imgEl.onload = function() {{
-    // Display at fixed 740px wide, scaled height
-    const DW = Math.min(OW, 740);
-    const DH = Math.round(DW * OH / OW);
-    cv.width  = DW;
-    cv.height = DH;
-    cv.style.width  = DW + 'px';
-    cv.style.height = DH + 'px';
-    ctx.drawImage(imgEl, 0, 0, DW, DH);
-    // Store display dims for coord scaling
-    cv._dw = DW; cv._dh = DH;
-  }};
-  imgEl.src = 'data:image/jpeg;base64,{b64}';
-
-  function toOrig(e) {{
-    const r = cv.getBoundingClientRect();
-    const dw = cv._dw || cv.width;
-    const dh = cv._dh || cv.height;
-    return {{
-      x: Math.round((e.clientX - r.left) / r.width  * OW),
-      y: Math.round((e.clientY - r.top)  / r.height * OH)
-    }};
-  }}
-
-  cv.addEventListener('mousemove', function(e) {{
-    const p = toOrig(e);
-    info.textContent = '📍 ' + p.x + ' , ' + p.y + ' px';
-    // Redraw image + crosshair
-    const dw = cv._dw || cv.width; const dh = cv._dh || cv.height;
-    ctx.drawImage(imgEl, 0, 0, dw, dh);
-    const r  = cv.getBoundingClientRect();
-    const px = (e.clientX - r.left) / r.width  * dw;
-    const py = (e.clientY - r.top)  / r.height * dh;
-    ctx.strokeStyle = 'rgba(245,166,35,0.7)';
-    ctx.lineWidth = Math.max(1, dw/400);
-    ctx.setLineDash([8, 5]);
-    ctx.beginPath(); ctx.moveTo(px, 0);  ctx.lineTo(px, OH); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, py);  ctx.lineTo(OW, py); ctx.stroke();
-    ctx.setLineDash([]);
-  }});
-
-  cv.addEventListener('mouseleave', function() {{
-    const dw2 = cv._dw || cv.width; const dh2 = cv._dh || cv.height;
-    ctx.drawImage(imgEl, 0, 0, dw2, dh2);
-    info.textContent = '👆 Clicca in alto a sinistra della copertina';
-  }});
-
-  cv.addEventListener('click', function(e) {{
-    const p = toOrig(e);
-    // Draw click marker
-    ctx.fillStyle = 'rgba(245,166,35,0.9)';
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, Math.max(8, OW/60), 0, Math.PI*2);
-    ctx.fill();
-    info.textContent = '✅ Click: ' + p.x + ' , ' + p.y;
-
-    const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-    for (const inp of inputs) {{
-      if (inp.getAttribute('aria-label') === 'coord_input_{canvas_key}') {{
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(inp, p.x + ',' + p.y);
-        inp.dispatchEvent(new Event('input', {{bubbles:true}}));
-        break;
-      }}
-    }}
-  }});
-}})();
-</script>
-"""
-    # Height = canvas display height based on aspect ratio at ~780px wide
-    display_h = int(740 * orig_h / orig_w) + 50
-    st.components.v1.html(html, height=display_h, scrolling=False)
-    coord_str = st.text_input("", key=f"coord_input_{canvas_key}",
-                               label_visibility="collapsed",
-                               placeholder="clicca sull'immagine…")
-    if coord_str and "," in coord_str:
-        try:
-            cx, cy = coord_str.strip().split(",")
-            return {"x": int(cx), "y": int(cy)}
-        except: pass
+    coords = streamlit_image_coordinates(display, key=canvas_key, use_column_width=True)
+    if coords:
+        # coords are in display pixels — convert to original image pixels
+        disp_w = coords.get("width", orig_w)
+        disp_h = coords.get("height", orig_h)
+        orig_x = round(coords["x"] * orig_w / disp_w)
+        orig_y = round(coords["y"] * orig_h / disp_h)
+        return {"x": orig_x, "y": orig_y}
     return None
 
 # ── SIDEBAR ────────────────────────────────────────────────────────────────
