@@ -69,7 +69,16 @@ def auto_detect(img: Image.Image):
         PAD = 4
         x1,x2 = max(0,int(xs.min())-PAD), min(W-1,int(xs.max())+PAD)
         y1,y2 = max(0,int(ys.min())-PAD), min(H-1,int(ys.max())+PAD)
-        return {"x":int(x1*ow/S),"y":int(y1*oh/S),"width":int((x2-x1)*ow/S),"height":int((y2-y1)*oh/S)}
+        x = int(x1*ow/S)
+        y = int(y1*oh/S)
+        w = int((x2-x1)*ow/S)
+        h = int((y2-y1)*oh/S)
+        # Clamp to image bounds
+        x = max(0, min(x, ow-1))
+        y = max(0, min(y, oh-1))
+        w = min(w, ow - x)
+        h = min(h, oh - y)
+        return {"x":x,"y":y,"width":w,"height":h}
     except: return None
 
 def draw_overlay(img: Image.Image, coords, scale_pct, p1=None) -> Image.Image:
@@ -125,10 +134,39 @@ var OW=__OW__,OH=__OH__,DW=__DW__,DH=__DH__;
 var im=new Image();
 im.onload=function(){ctx.drawImage(im,0,0,DW,DH);};
 im.src='data:image/jpeg;base64,__B64__';
-function pos(e){var r=c.getBoundingClientRect();return[Math.round((e.clientX-r.left)*OW/DW),Math.round((e.clientY-r.top)*OH/DH)];}
-c.onmousemove=function(e){var p=pos(e);var r=c.getBoundingClientRect();var dx=e.clientX-r.left,dy=e.clientY-r.top;ctx.drawImage(im,0,0,DW,DH);ctx.strokeStyle='rgba(255,224,51,0.8)';ctx.lineWidth=1;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(dx,0);ctx.lineTo(dx,DH);ctx.stroke();ctx.beginPath();ctx.moveTo(0,dy);ctx.lineTo(DW,dy);ctx.stroke();ctx.setLineDash([]);L.textContent='X='+p[0]+'  Y='+p[1];};
+function pos(e){
+  // Use canvas offset directly — ignore any iframe body margin
+  var r=c.getBoundingClientRect();
+  var dx=e.clientX-r.left;
+  var dy=e.clientY-r.top;
+  // dx/dy are in CSS pixels relative to canvas top-left
+  // canvas CSS size == canvas pixel size (no CSS scaling)
+  var ox=Math.round(dx*OW/DW);
+  var oy=Math.round(dy*OH/DH);
+  return[ox,oy,dx,dy];
+}
+c.onmousemove=function(e){
+  var p=pos(e);
+  ctx.drawImage(im,0,0,DW,DH);
+  ctx.strokeStyle='rgba(255,224,51,0.8)';ctx.lineWidth=1;ctx.setLineDash([5,4]);
+  ctx.beginPath();ctx.moveTo(p[2],0);ctx.lineTo(p[2],DH);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(0,p[3]);ctx.lineTo(DW,p[3]);ctx.stroke();
+  ctx.setLineDash([]);
+  L.textContent='X='+p[0]+'  Y='+p[1];
+};
 c.onmouseleave=function(){ctx.drawImage(im,0,0,DW,DH);L.textContent='muovi il mouse';};
-c.onclick=function(e){var p=pos(e);var r=c.getBoundingClientRect();var dx=e.clientX-r.left,dy=e.clientY-r.top;ctx.drawImage(im,0,0,DW,DH);ctx.fillStyle='rgba(255,100,50,0.9)';ctx.beginPath();ctx.arc(dx,dy,9,0,Math.PI*2);ctx.fill();L.textContent='CLICK X='+p[0]+' Y='+p[1];var inp=window.parent.document.querySelector('input[aria-label="ci___UID__"]');if(inp){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inp,p[0]+','+p[1]);inp.dispatchEvent(new Event('input',{bubbles:true}));}};
+c.onclick=function(e){
+  var p=pos(e);
+  ctx.drawImage(im,0,0,DW,DH);
+  ctx.fillStyle='rgba(255,100,50,0.9)';
+  ctx.beginPath();ctx.arc(p[2],p[3],9,0,Math.PI*2);ctx.fill();
+  L.textContent='CLICK X='+p[0]+' Y='+p[1];
+  var inp=window.parent.document.querySelector('input[aria-label="ci___UID__"]');
+  if(inp){
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inp,p[0]+','+p[1]);
+    inp.dispatchEvent(new Event('input',{bubbles:true}));
+  }
+};
 """
     js = js.replace("__OW__", str(orig_w)).replace("__OH__", str(orig_h))
     js = js.replace("__DW__", str(disp_w)).replace("__DH__", str(disp_h))
