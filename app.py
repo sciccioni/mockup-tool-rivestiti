@@ -195,11 +195,19 @@ html,body{{margin:0;padding:0;background:#111;overflow:hidden}}
 </script>
 </body></html>"""
 
+    # Usiamo un counter per invalidare la key del text_input dopo ogni click
+    # così il valore non persiste tra rerun
+    counter_key = f"click_count_{uid}"
+    if counter_key not in st.session_state:
+        st.session_state[counter_key] = 0
+    input_key = f"ci_{uid}_{st.session_state[counter_key]}"
+
     st.components.v1.html(html, height=disp_h + 36, width=disp_w + 4, scrolling=False)
-    val = st.text_input(f"ci_{uid}", key=f"ci_{uid}", label_visibility="collapsed")
+    val = st.text_input(f"ci_{uid}", key=input_key, label_visibility="collapsed")
     if val and "," in val:
         try:
             cx, cy = val.split(",")
+            st.session_state[counter_key] += 1  # invalida la key per il prossimo rerun
             return {"x": int(cx), "y": int(cy)}
         except:
             pass
@@ -302,8 +310,11 @@ elif ss.step == 2:
                         p1 = ss[p1_key]
                         x = min(p1["x"], click["x"]); y = min(p1["y"], click["y"])
                         w = abs(click["x"]-p1["x"]); h = abs(click["y"]-p1["y"])
+                        st.info(f"🔍 P1=({p1['x']},{p1['y']}) P2=({click['x']},{click['y']}) → X={x} Y={y} W={w} H={h}")
                         if w > 10 and h > 10:
                             ss.default_coords[fmt] = {"x":x,"y":y,"width":w,"height":h}
+                        else:
+                            st.warning(f"⚠️ W={w} o H={h} troppo piccoli (< 10), non salvato. P1 e P2 coincidono?")
                         ss[p1_key] = None; st.rerun()
 
             # Per-template overrides
