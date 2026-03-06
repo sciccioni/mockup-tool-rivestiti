@@ -115,16 +115,12 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
         result.paste(g,(max(0,ox),max(0,oy)),mask)
     return result
 
-# ── Click canvas v3 — bulletproof ──────────────────────────────────────────
-# Approccio: usiamo un <img> HTML invece di <canvas> per il display.
-# Il click su <img> con offsetX/offsetY dà coordinate CSS relative all'immagine.
-# Il rapporto orig/display è calcolato Python-side e passato come costante.
-# Zero dipendenza da canvas sizing, devicePixelRatio, getBoundingClientRect.
+# ── Click canvas v4 — misura dimensione reale a runtime ────────────────────
 def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
     flat = flatten(img)
     orig_w, orig_h = flat.size
 
-    # Dimensione display: max 480px larghezza
+    # Dimensione display target
     disp_w = min(orig_w, 480)
     disp_h = int(orig_h * disp_w / orig_w)
 
@@ -134,54 +130,58 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
     b64 = base64.b64encode(buf.getvalue()).decode()
     uid = canvas_key.replace("-","_").replace(" ","_").replace(".","_")
 
-    # Rapporti calcolati Python-side — nessun calcolo DOM nel JS
-    ratio_x = orig_w / disp_w
-    ratio_y = orig_h / disp_h
-
     html = f"""<!DOCTYPE html>
 <html><head><style>
 html,body{{margin:0;padding:0;background:#111;overflow:hidden}}
 *{{box-sizing:border-box}}
 #wrap{{position:relative;display:inline-block;line-height:0}}
-#IMG{{display:block;width:{disp_w}px;height:{disp_h}px;cursor:crosshair;image-rendering:auto}}
+#IMG{{display:block;width:{disp_w}px;height:{disp_h}px;cursor:crosshair}}
 #dot{{position:absolute;width:18px;height:18px;border-radius:50%;
   background:rgba(255,100,50,0.92);border:2px solid #fff;
   pointer-events:none;display:none;transform:translate(-50%,-50%)}}
 #LB{{font:700 13px monospace;color:#ffe033;background:#1a1a1a;padding:6px 10px;min-height:28px}}
 </style></head><body>
 <div id="wrap">
-  <img id="IMG" src="data:image/jpeg;base64,{b64}"/>
+  <img id="IMG" src="data:image/jpeg;base64,{b64}" draggable="false"/>
   <div id="dot"></div>
 </div>
 <div id="LB">clicca per definire il punto</div>
 <script>
 (function(){{
-  var img = document.getElementById('IMG');
+  var imgEl = document.getElementById('IMG');
   var dot = document.getElementById('dot');
   var lb  = document.getElementById('LB');
-  var RX  = {ratio_x:.6f};
-  var RY  = {ratio_y:.6f};
   var OW  = {orig_w};
   var OH  = {orig_h};
 
-  img.onclick = function(e) {{
-    // offsetX/Y su un <img> con dimensione CSS fissa = coordinate CSS pixel
-    // relative all'angolo top-left dell'immagine. Nessuna ambiguità.
+  imgEl.onclick = function(e) {{
+    e.preventDefault();
+
+    // offsetX/Y = posizione click relativa all'elemento img, in CSS px
     var cx = e.offsetX;
     var cy = e.offsetY;
 
-    // Converti in coordinate immagine originale
-    var ox = Math.round(cx * RX);
-    var oy = Math.round(cy * RY);
+    // Dimensione CSS reale dell'immagine in questo momento
+    // (usa offsetWidth/offsetHeight che includono bordi se presenti,
+    //  ma qui non ne abbiamo, quindi = dimensione CSS pura)
+    var renderedW = imgEl.offsetWidth;
+    var renderedH = imgEl.offsetHeight;
+
+    // Ratio calcolato sulla dimensione REALE renderizzata
+    var ox = Math.round(cx * OW / renderedW);
+    var oy = Math.round(cy * OH / renderedH);
     ox = Math.max(0, Math.min(OW - 1, ox));
     oy = Math.max(0, Math.min(OH - 1, oy));
 
-    // Mostra marker
+    // Marker visuale
     dot.style.display = 'block';
     dot.style.left = cx + 'px';
     dot.style.top  = cy + 'px';
 
-    lb.textContent = 'X=' + ox + ' Y=' + oy + ' (img ' + OW + 'x' + OH + ')';
+    lb.textContent = 'X=' + ox + ' Y=' + oy +
+      ' (off=' + cx + ',' + cy +
+      ' rendered=' + renderedW + 'x' + renderedH +
+      ' orig=' + OW + 'x' + OH + ')';
 
     // Invia a Streamlit
     var inp = window.parent.document.querySelector('input[aria-label="ci_{uid}"]');
