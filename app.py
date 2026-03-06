@@ -24,13 +24,12 @@ h1,h2,h3 { color:#e4e4ec !important; }
 
 FORMATS = ["Orizzontale", "Quadrato", "Verticali"]
 
-# Keyword → sotto-tipo. Ordine conta: primo match vince.
-SUBTYPE_KEYWORDS = [
-    ("gallery", "gallery"),
-    ("printbox", "printbox"),
-    ("app", "printbox"),       # "app_printbox" contiene "app"
-]
-DEFAULT_SUBTYPE = "gallery"    # fallback se nessun keyword matcha
+# Tipologie riconosciute dal nome file
+TYPE_KEYWORDS = ["gallery", "printbox"]
+DEFAULT_TYPE = "gallery"
+
+# Pattern per dimensione (es. 20x20, 32x24, 30x30)
+DIM_PATTERN = re.compile(r'(\d+)x(\d+)', re.IGNORECASE)
 
 for k, v in {
     "templates": {},       # {fmt: [{"name":..,"img":..,"ext":..,"subtype":..}]}
@@ -54,12 +53,28 @@ def flatten(img: Image.Image) -> Image.Image:
     return img.convert("RGB")
 
 def detect_subtype(filename: str) -> str:
-    """Rileva sotto-tipo dal nome file."""
+    """Rileva sotto-tipo dal nome file.
+    Combina dimensione (se presente) + tipologia.
+    Es: '20x20-SALVIA-gallery_web.jpg' → '20x20_gallery'
+        '32x24-PEONIA-gallery_web.jpg' → '32x24_gallery'
+        'preview-BIANCO-app_printbox.png' → 'printbox'
+    """
     low = filename.lower()
-    for keyword, subtype in SUBTYPE_KEYWORDS:
-        if keyword in low:
-            return subtype
-    return DEFAULT_SUBTYPE
+
+    # Rileva tipologia
+    file_type = DEFAULT_TYPE
+    for kw in TYPE_KEYWORDS:
+        if kw in low:
+            file_type = kw
+            break
+
+    # Rileva dimensione
+    dim_match = DIM_PATTERN.search(low)
+    if dim_match:
+        dim = f"{dim_match.group(1)}x{dim_match.group(2)}"
+        return f"{dim}_{file_type}"
+
+    return file_type
 
 def sub_key(fmt: str, subtype: str) -> str:
     return f"{fmt}|{subtype}"
