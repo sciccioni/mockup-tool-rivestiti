@@ -173,13 +173,11 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
 
     html = f"""
 <style>
-  #wrap_{canvas_key} {{ position:relative; width:100%; line-height:0; }}
-  #wrap_{canvas_key} canvas {{ display:block; width:100%; cursor:crosshair; border-radius:6px; }}
+  body {{ margin:0; padding:0; background:transparent; overflow:hidden; }}
+  #cv_{canvas_key} {{ display:block; cursor:crosshair; border-radius:6px; background:#fff; max-width:100%; }}
   #info_{canvas_key} {{ font-size:11px; color:#7c6fff; font-family:monospace; min-height:18px; padding:3px 0; }}
 </style>
-<div id="wrap_{canvas_key}">
-  <canvas id="cv_{canvas_key}"></canvas>
-</div>
+<canvas id="cv_{canvas_key}"></canvas>
 <div id="info_{canvas_key}">👆 Clicca in alto a sinistra della copertina</div>
 
 <script>
@@ -191,15 +189,23 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
 
   const imgEl = new Image();
   imgEl.onload = function() {{
-    // Set canvas intrinsic size = original image size
-    cv.width  = OW;
-    cv.height = OH;
-    ctx.drawImage(imgEl, 0, 0, OW, OH);
+    // Display at fixed 740px wide, scaled height
+    const DW = Math.min(OW, 740);
+    const DH = Math.round(DW * OH / OW);
+    cv.width  = DW;
+    cv.height = DH;
+    cv.style.width  = DW + 'px';
+    cv.style.height = DH + 'px';
+    ctx.drawImage(imgEl, 0, 0, DW, DH);
+    // Store display dims for coord scaling
+    cv._dw = DW; cv._dh = DH;
   }};
   imgEl.src = 'data:image/jpeg;base64,{b64}';
 
   function toOrig(e) {{
     const r = cv.getBoundingClientRect();
+    const dw = cv._dw || cv.width;
+    const dh = cv._dh || cv.height;
     return {{
       x: Math.round((e.clientX - r.left) / r.width  * OW),
       y: Math.round((e.clientY - r.top)  / r.height * OH)
@@ -210,12 +216,13 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
     const p = toOrig(e);
     info.textContent = '📍 ' + p.x + ' , ' + p.y + ' px';
     // Redraw image + crosshair
-    ctx.drawImage(imgEl, 0, 0, OW, OH);
+    const dw = cv._dw || cv.width; const dh = cv._dh || cv.height;
+    ctx.drawImage(imgEl, 0, 0, dw, dh);
     const r  = cv.getBoundingClientRect();
-    const px = (e.clientX - r.left) / r.width  * OW;
-    const py = (e.clientY - r.top)  / r.height * OH;
+    const px = (e.clientX - r.left) / r.width  * dw;
+    const py = (e.clientY - r.top)  / r.height * dh;
     ctx.strokeStyle = 'rgba(245,166,35,0.7)';
-    ctx.lineWidth = Math.max(1, OW/400);
+    ctx.lineWidth = Math.max(1, dw/400);
     ctx.setLineDash([8, 5]);
     ctx.beginPath(); ctx.moveTo(px, 0);  ctx.lineTo(px, OH); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0, py);  ctx.lineTo(OW, py); ctx.stroke();
@@ -223,7 +230,8 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
   }});
 
   cv.addEventListener('mouseleave', function() {{
-    ctx.drawImage(imgEl, 0, 0, OW, OH);
+    const dw2 = cv._dw || cv.width; const dh2 = cv._dh || cv.height;
+    ctx.drawImage(imgEl, 0, 0, dw2, dh2);
     info.textContent = '👆 Clicca in alto a sinistra della copertina';
   }});
 
@@ -250,7 +258,7 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
 </script>
 """
     # Height = canvas display height based on aspect ratio at ~780px wide
-    display_h = int(780 * orig_h / orig_w) + 40
+    display_h = int(740 * orig_h / orig_w) + 50
     st.components.v1.html(html, height=display_h, scrolling=False)
     coord_str = st.text_input("", key=f"coord_input_{canvas_key}",
                                label_visibility="collapsed",
