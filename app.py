@@ -165,13 +165,14 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
 
     html = (
         "<!DOCTYPE html><html><head><style>"
-        "*{margin:0;padding:0;box-sizing:border-box}"
-        "body{background:#111;overflow:hidden}"
-        "canvas{display:block;cursor:crosshair}"
-        "#LB{font:700 15px monospace;color:#ffe033;background:#111;padding:5px 10px;min-height:28px}"
+        "html,body{margin:0;padding:0;border:0;background:#111;overflow:hidden}"
+        "*{box-sizing:border-box}"
+        "canvas{display:block;cursor:crosshair;position:absolute;top:0;left:0}"
+        "#LB{font:700 15px monospace;color:#ffe033;background:#111;padding:5px 10px;"
+        "min-height:28px;position:absolute;top:" + str(disp_h) + "px;left:0;width:100%}"
         "</style></head><body>"
         '<canvas id="CV" width="' + str(disp_w) + '" height="' + str(disp_h) + '"></canvas>'
-        '<div id="LB">muovi il mouse</div>'
+        '<div id="LB">clicca per definire il punto</div>'
         "<script>" + js + "</script>"
         "</body></html>"
     )
