@@ -1,8 +1,10 @@
 import streamlit as st
 from PIL import Image, ImageDraw, ImageOps
 import numpy as np
-import zipfile, io, re
+import zipfile, io, re, json
 from pathlib import Path
+
+CALIB_FILE = Path(__file__).parent / "calibration.json"
 
 st.set_page_config(
     page_title="Mockup Compositor · PhotoSì",
@@ -42,6 +44,48 @@ for k, v in {
     if k not in st.session_state:
         st.session_state[k] = v
 ss = st.session_state
+
+# ── Persistenza calibrazione ──────────────────────────────────────────────
+def save_calibration():
+    """Salva coordinate e scale su file JSON."""
+    data = {
+        "sub_coords": ss.sub_coords,
+        "sub_scale": ss.sub_scale,
+        "tpl_coords": ss.tpl_coords,
+        "tpl_scale": ss.tpl_scale,
+    }
+    try:
+        CALIB_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    except Exception as e:
+        st.toast(f"⚠️ Errore salvataggio: {e}", icon="⚠️")
+
+def load_calibration():
+    """Carica coordinate e scale da file JSON (solo al primo avvio)."""
+    if not CALIB_FILE.exists():
+        return
+    try:
+        data = json.loads(CALIB_FILE.read_text())
+        ss.sub_coords = data.get("sub_coords", {})
+        ss.sub_scale = data.get("sub_scale", {})
+        ss.tpl_coords = data.get("tpl_coords", {})
+        ss.tpl_scale = data.get("tpl_scale", {})
+    except Exception as e:
+        st.toast(f"⚠️ Errore caricamento calibrazione: {e}", icon="⚠️")
+
+# Carica al primo avvio
+if "calib_loaded" not in ss:
+    load_calibration()
+    ss.calib_loaded = True
+
+# Mostra stato calibrazione in sidebar
+with st.sidebar:
+    n_sub = len(ss.sub_coords)
+    n_tpl = sum(len(v) for v in ss.tpl_coords.values())
+    if CALIB_FILE.exists():
+        st.caption(f"💾 Calibrazione: {n_sub} sotto-tipi, {n_tpl} override")
+        st.caption(f"📄 `{CALIB_FILE.name}`")
+    else:
+        st.caption("💾 Nessuna calibrazione salvata")
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 def flatten(img: Image.Image) -> Image.Image:
@@ -236,6 +280,7 @@ elif ss.step == 2:
                             det = auto_detect(sub_tpls[0]["img"])
                             if det:
                                 ss.sub_coords[sk] = det
+                                save_calibration()
                                 st.rerun()
                             else:
                                 st.error("Non rilevato")
@@ -249,6 +294,7 @@ elif ss.step == 2:
                             if st.form_submit_button("💾 Salva default", use_container_width=True, type="primary"):
                                 ss.sub_coords[sk] = {"x":dx,"y":dy,"width":dw,"height":dh}
                                 ss.sub_scale[sk] = new_scale
+                                save_calibration()
                                 st.rerun()
 
                         if def_coords:
@@ -289,6 +335,7 @@ elif ss.step == 2:
                                 if det:
                                     if fmt not in ss.tpl_coords: ss.tpl_coords[fmt] = {}
                                     ss.tpl_coords[fmt][sel_name] = det
+                                    save_calibration()
                                     st.rerun()
                             with st.form(key=f"ovform_{sk}_{sel_name}"):
                                 oc = ov_coords or {}
@@ -303,11 +350,12 @@ elif ss.step == 2:
                                         ss.tpl_coords[fmt][sel_name] = {"x":ox2,"y":oy2,"width":ow2,"height":oh2}
                                         if fmt not in ss.tpl_scale: ss.tpl_scale[fmt] = {}
                                         ss.tpl_scale[fmt][sel_name] = nov_scale
+                                        save_calibration()
                                         st.rerun()
-                                with c2:
                                     if st.form_submit_button("🗑️ Reset", use_container_width=True):
                                         ss.tpl_coords.get(fmt, {}).pop(sel_name, None)
                                         ss.tpl_scale.get(fmt, {}).pop(sel_name, None)
+                                        save_calibration()
                                         st.rerun()
 
                         with ocol2:
