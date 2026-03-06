@@ -147,7 +147,9 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
 
   cv.onmousemove = function(e) {{
     const r = cv.getBoundingClientRect();
-    const dx = e.clientX - r.left, dy = e.clientY - r.top;
+    // r.width is CSS rendered width, DW is canvas pixel width — must normalize
+    const dx = (e.clientX - r.left) * DW / r.width;
+    const dy = (e.clientY - r.top)  * DH / r.height;
     const ox = Math.round(dx * OW / DW), oy = Math.round(dy * OH / DH);
     info.textContent = '📍 ' + ox + ' , ' + oy + ' px';
     ctx.drawImage(imgEl, 0, 0, DW, DH);
@@ -158,13 +160,13 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
     ctx.setLineDash([]);
     // Coordinate label on canvas - large, readable
     const label = 'X: ' + ox + '  Y: ' + oy;
-    const fsize = Math.max(14, Math.round(DW/35));
+    const fsize = Math.max(16, Math.round(DW/30));
     ctx.font = 'bold ' + fsize + 'px monospace';
     const tw = ctx.measureText(label).width;
-    ctx.fillStyle = 'rgba(20,20,30,0.85)';
-    ctx.fillRect(8, DH-fsize-18, tw+20, fsize+14);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(label, 18, DH-10);
+    ctx.fillStyle = 'rgba(10,10,20,0.88)';
+    ctx.fillRect(6, DH-fsize-22, tw+24, fsize+18);
+    ctx.fillStyle = '#ffdd00';
+    ctx.fillText(label, 18, DH-8);
   }};
 
   cv.onmouseleave = function() {{
@@ -174,7 +176,8 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
 
   cv.onclick = function(e) {{
     const r = cv.getBoundingClientRect();
-    const dx = e.clientX - r.left, dy = e.clientY - r.top;
+    const dx = (e.clientX - r.left) * DW / r.width;
+    const dy = (e.clientY - r.top)  * DH / r.height;
     const ox = Math.round(dx * OW / DW), oy = Math.round(dy * OH / DH);
     info.textContent = '✅ ' + ox + ' , ' + oy;
     ctx.drawImage(imgEl, 0, 0, DW, DH);
