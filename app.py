@@ -3,7 +3,6 @@ from PIL import Image, ImageDraw
 import numpy as np
 import json, zipfile, io, base64
 from pathlib import Path
-from streamlit_image_coordinates import streamlit_image_coordinates
 
 st.set_page_config(
     page_title="Mockup Compositor · PhotoSì",
@@ -152,9 +151,7 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
 
 # ── Click canvas ───────────────────────────────────────────────────────────
 def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
-    """Uses streamlit-image-coordinates for native click detection."""
-    orig_w, orig_h = img.size
-    # Flatten transparency
+    """Show image with st.image. Coordinates via number inputs below."""
     display = img.copy()
     if display.mode in ("RGBA", "LA", "P"):
         bg = Image.new("RGB", display.size, (255, 255, 255))
@@ -165,14 +162,21 @@ def click_canvas(img: Image.Image, canvas_key: str) -> dict | None:
     else:
         display = display.convert("RGB")
 
-    coords = streamlit_image_coordinates(display, key=canvas_key, use_column_width=True)
-    if coords:
-        # coords are in display pixels — convert to original image pixels
-        disp_w = coords.get("width", orig_w)
-        disp_h = coords.get("height", orig_h)
-        orig_x = round(coords["x"] * orig_w / disp_w)
-        orig_y = round(coords["y"] * orig_h / disp_h)
-        return {"x": orig_x, "y": orig_y}
+    st.image(display, use_container_width=True)
+    orig_w, orig_h = img.size
+    st.caption(f"Dimensioni originali: {orig_w} × {orig_h} px")
+
+    col1, col2, col3 = st.columns([2,2,1])
+    with col1:
+        cx = st.number_input("X click", min_value=0, max_value=orig_w, value=0,
+                             key=f"click_x_{canvas_key}", label_visibility="visible")
+    with col2:
+        cy = st.number_input("Y click", min_value=0, max_value=orig_h, value=0,
+                             key=f"click_y_{canvas_key}", label_visibility="visible")
+    with col3:
+        st.markdown("<br/>", unsafe_allow_html=True)
+        if st.button("📍 Usa", key=f"click_use_{canvas_key}", use_container_width=True):
+            return {"x": int(cx), "y": int(cy)}
     return None
 
 # ── SIDEBAR ────────────────────────────────────────────────────────────────
