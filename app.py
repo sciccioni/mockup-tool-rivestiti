@@ -128,7 +128,7 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
 <style>
   html,body {{ margin:0; padding:0; background:#1e1e22; overflow:hidden; }}
   canvas {{ display:block; cursor:crosshair; border-radius:6px; }}
-  #info {{ font-size:11px; color:#a89eff; font-family:monospace; padding:4px 2px; min-height:18px; }}
+  #info {{ font-size:13px; font-weight:700; color:#ffffff; font-family:monospace; padding:6px 10px; min-height:24px; background:#1e1e22; border:1px solid #7c6fff; border-radius:0 0 6px 6px; }}
 </style>
 </head>
 <body>
@@ -472,3 +472,4 @@ elif ss.step == 4:
         st.download_button(f"⬇️ Scarica ZIP — {done} immagini",zip_buf.getvalue(),
                           "mockup-export.zip","application/zip",use_container_width=True,type="primary")
     if st.button("← Indietro", use_container_width=True): ss.step=3; st.rerun()
+
