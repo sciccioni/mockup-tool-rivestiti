@@ -156,6 +156,15 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
     ctx.beginPath(); ctx.moveTo(dx,0); ctx.lineTo(dx,DH); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0,dy); ctx.lineTo(DW,dy); ctx.stroke();
     ctx.setLineDash([]);
+    // Coordinate label on canvas - large, readable
+    const label = 'X: ' + ox + '  Y: ' + oy;
+    const fsize = Math.max(14, Math.round(DW/35));
+    ctx.font = 'bold ' + fsize + 'px monospace';
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(20,20,30,0.85)';
+    ctx.fillRect(8, DH-fsize-18, tw+20, fsize+14);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(label, 18, DH-10);
   }};
 
   cv.onmouseleave = function() {{
