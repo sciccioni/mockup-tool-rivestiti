@@ -59,25 +59,27 @@ def auto_detect(img: Image.Image):
     try:
         ow, oh = img.size
         S = 400
-        arr = np.array(img.resize((S,S), Image.NEAREST).convert("RGB"), dtype=float)
+        flat = flatten(img)
+        arr = np.array(flat.resize((S,S), Image.NEAREST), dtype=float)
         H, W = arr.shape[:2]
-        corners = [arr[:8,:8], arr[:8,W-8:], arr[H-8:,:8], arr[H-8:,W-8:]]
-        bg = np.mean([c.mean(axis=(0,1)) for c in corners], axis=0)
-        mask = np.abs(arr-bg).sum(axis=2) > 18
+        # Sample background from edges (not corners — corners may be on the cover)
+        top    = arr[:6, :].reshape(-1, 3)
+        bottom = arr[H-6:, :].reshape(-1, 3)
+        left   = arr[:, :6].reshape(-1, 3)
+        right  = arr[:, W-6:].reshape(-1, 3)
+        bg = np.concatenate([top, bottom, left, right]).mean(axis=0)
+        mask = np.abs(arr - bg).sum(axis=2) > 22
         ys, xs = np.where(mask)
         if not len(xs): return None
-        PAD = 4
-        x1,x2 = max(0,int(xs.min())-PAD), min(W-1,int(xs.max())+PAD)
-        y1,y2 = max(0,int(ys.min())-PAD), min(H-1,int(ys.max())+PAD)
-        x = int(x1*ow/S)
-        y = int(y1*oh/S)
-        w = int((x2-x1)*ow/S)
-        h = int((y2-y1)*oh/S)
-        # Clamp to image bounds
-        x = max(0, min(x, ow-1))
-        y = max(0, min(y, oh-1))
-        w = min(w, ow - x)
-        h = min(h, oh - y)
+        PAD = 3
+        x1 = max(0, int(xs.min()) - PAD)
+        x2 = min(W-1, int(xs.max()) + PAD)
+        y1 = max(0, int(ys.min()) - PAD)
+        y2 = min(H-1, int(ys.max()) + PAD)
+        x = max(0, int(x1*ow/S))
+        y = max(0, int(y1*oh/S))
+        w = min(int((x2-x1)*ow/S), ow - x)
+        h = min(int((y2-y1)*oh/S), oh - y)
         return {"x":x,"y":y,"width":w,"height":h}
     except: return None
 
