@@ -127,7 +127,7 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
 <head>
 <style>
   html,body {{ margin:0; padding:0; background:#1e1e22; overflow:hidden; }}
-  canvas {{ display:block; cursor:crosshair; border-radius:6px; }}
+  canvas {{ display:block; cursor:crosshair; border-radius:6px; width:{disp_w}px; height:{disp_h}px; }}
   #info {{ font-size:13px; font-weight:700; color:#ffffff; font-family:monospace; padding:6px 10px; min-height:24px; background:#1e1e22; border:1px solid #7c6fff; border-radius:0 0 6px 6px; }}
 </style>
 </head>
@@ -199,7 +199,7 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
 </body>
 </html>"""
 
-    iframe_h = disp_h + 30
+    iframe_h = disp_h + 55
     st.components.v1.html(html, height=iframe_h, scrolling=False)
 
     # Show last known coords from session state
