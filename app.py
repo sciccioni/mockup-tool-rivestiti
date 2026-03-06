@@ -62,7 +62,6 @@ def auto_detect(img: Image.Image):
         flat = flatten(img)
         arr = np.array(flat.resize((S,S), Image.NEAREST), dtype=float)
         H, W = arr.shape[:2]
-        # Sample background from edges (not corners — corners may be on the cover)
         top    = arr[:6, :].reshape(-1, 3)
         bottom = arr[H-6:, :].reshape(-1, 3)
         left   = arr[:, :6].reshape(-1, 3)
@@ -116,60 +115,106 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
         result.paste(g,(max(0,ox),max(0,oy)),mask)
     return result
 
-# ── Click canvas ───────────────────────────────────────────────────────────
+# ── Click canvas (FIXED coordinate mapping) ───────────────────────────────
 def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
     flat = flatten(img)
     orig_w, orig_h = flat.size
+
+    # Calcola dimensioni display mantenendo aspect ratio
     disp_w = min(orig_w, 500)
     disp_h = int(orig_h * disp_w / orig_w)
+
     resized = flat.resize((disp_w, disp_h), Image.LANCZOS)
     buf = io.BytesIO()
     resized.save(buf, format="JPEG", quality=82)
     b64 = base64.b64encode(buf.getvalue()).decode()
     uid = canvas_key.replace("-","_").replace(" ","_").replace(".","_")
 
+    # ── FIX: JavaScript corretto per coordinate ──
+    # Il problema principale era che getBoundingClientRect() restituisce dimensioni
+    # CSS che possono differire dalle dimensioni logiche del canvas quando l'iframe
+    # viene scalato da Streamlit. La soluzione:
+    # 1. Usare canvas.width/height (dimensioni logiche) come riferimento fisso
+    # 2. Calcolare il rapporto tra dimensioni CSS e logiche per correggere l'offset
+    # 3. Mappare direttamente da coordinate canvas → coordinate immagine originale
+    # 4. Clamp delle coordinate per evitare valori fuori range
     js = """
-    var c=document.getElementById('CV');
-    var ctx=c.getContext('2d');
-    var L=document.getElementById('LB');
-    var OW=__OW__,OH=__OH__,DW=__DW__,DH=__DH__;
-    var im=new Image();
-    im.onload=function(){ctx.drawImage(im,0,0,DW,DH);};
-    im.src='data:image/jpeg;base64,__B64__';
-    function pos(e){
-      var r=c.getBoundingClientRect();
-      var scaleX = c.width / r.width;
-      var scaleY = c.height / r.height;
-      var dx = (e.clientX - r.left) * scaleX;
-      var dy = (e.clientY - r.top) * scaleY;
-      var ox = Math.round(dx * OW / c.width);
-      var oy = Math.round(dy * OH / c.height);
-      return[ox,oy,dx,dy];
-    }
-    c.onclick=function(e){
-      var p=pos(e);
-      ctx.drawImage(im,0,0,DW,DH);
-      ctx.fillStyle='rgba(255,100,50,0.9)';
-      ctx.beginPath();ctx.arc(p[2],p[3],9,0,Math.PI*2);ctx.fill();
-      L.textContent='CLICK X='+p[0]+' Y='+p[1];
-      var inp=window.parent.document.querySelector('input[aria-label="ci___UID__"]');
-      if(inp){
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inp,p[0]+','+p[1]);
-        inp.dispatchEvent(new Event('input',{bubbles:true}));
-      }
+    var c = document.getElementById('CV');
+    var ctx = c.getContext('2d');
+    var L = document.getElementById('LB');
+    var OW = __OW__, OH = __OH__;
+
+    var im = new Image();
+    im.onload = function(){
+        c.width = __DW__;
+        c.height = __DH__;
+        ctx.drawImage(im, 0, 0, c.width, c.height);
+    };
+    im.src = 'data:image/jpeg;base64,__B64__';
+
+    c.onclick = function(e) {
+        var rect = c.getBoundingClientRect();
+
+        // Coordinate del click relative al canvas CSS
+        var cssX = e.clientX - rect.left;
+        var cssY = e.clientY - rect.top;
+
+        // Rapporto tra dimensioni logiche del canvas e dimensioni CSS renderizzate
+        var ratioX = c.width / rect.width;
+        var ratioY = c.height / rect.height;
+
+        // Coordinate nel sistema del canvas (pixel logici)
+        var canvasX = cssX * ratioX;
+        var canvasY = cssY * ratioY;
+
+        // Coordinate nell'immagine originale (proporzionali)
+        var origX = Math.round(canvasX * OW / c.width);
+        var origY = Math.round(canvasY * OH / c.height);
+
+        // Clamp ai limiti dell'immagine originale
+        origX = Math.max(0, Math.min(OW - 1, origX));
+        origY = Math.max(0, Math.min(OH - 1, origY));
+
+        // Ridisegna immagine e marker
+        ctx.drawImage(im, 0, 0, c.width, c.height);
+        ctx.fillStyle = 'rgba(255,100,50,0.9)';
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(canvasX, canvasY, 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Mostra coordinate originali
+        L.textContent = 'X=' + origX + '  Y=' + origY + '  (img: ' + OW + 'x' + OH + ')';
+
+        // Invia valore a Streamlit tramite hidden input
+        var inp = window.parent.document.querySelector('input[aria-label="ci___UID__"]');
+        if (inp) {
+            var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            ).set;
+            nativeInputValueSetter.call(inp, origX + ',' + origY);
+            inp.dispatchEvent(new Event('input', {bubbles: true}));
+        }
     };
     """
     js = js.replace("__OW__", str(orig_w)).replace("__OH__", str(orig_h))
     js = js.replace("__DW__", str(disp_w)).replace("__DH__", str(disp_h))
     js = js.replace("__B64__", b64).replace("__UID__", uid)
 
+    # ── FIX: HTML con canvas dimensionato esplicitamente via CSS ──
+    # Forziamo width e height CSS uguali alle dimensioni logiche del canvas
+    # così getBoundingClientRect() == canvas.width/height (ratio 1:1)
+    # Questo elimina qualsiasi discrepanza di scaling
     html = (
         "<!DOCTYPE html><html><head><style>"
         "html,body{margin:0;padding:0;border:0;background:#111;overflow:hidden}"
         "*{box-sizing:border-box}"
-        "canvas{display:block;cursor:crosshair;position:absolute;top:0;left:0}"
-        "#LB{font:700 15px monospace;color:#ffe033;background:#111;padding:5px 10px;"
-        "min-height:28px;position:absolute;top:" + str(disp_h) + "px;left:0;width:100%}"
+        "canvas{display:block;cursor:crosshair;"
+        "width:" + str(disp_w) + "px;height:" + str(disp_h) + "px}"
+        "#LB{font:700 13px monospace;color:#ffe033;background:#1a1a1a;padding:6px 10px;"
+        "min-height:28px}"
         "</style></head><body>"
         '<canvas id="CV" width="' + str(disp_w) + '" height="' + str(disp_h) + '"></canvas>'
         '<div id="LB">clicca per definire il punto</div>'
@@ -177,15 +222,15 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
         "</body></html>"
     )
 
-    st.components.v1.html(html, height=disp_h+36, width=disp_w, scrolling=False)
+    st.components.v1.html(html, height=disp_h + 36, width=disp_w + 2, scrolling=False)
     val = st.text_input(f"ci_{uid}", key=f"ci_{uid}", label_visibility="collapsed")
     if val and "," in val:
         try:
-            cx,cy = val.split(",")
-            return {"x":int(cx),"y":int(cy)}
-        except: pass
+            cx, cy = val.split(",")
+            return {"x": int(cx), "y": int(cy)}
+        except:
+            pass
     return None
-
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -264,7 +309,6 @@ elif ss.step == 2:
                         f"<span style='color:#a89eff'>Scala</span> <span style='color:#f5a623;font-weight:600'>{new_scale}%</span>"
                         f"</div>", unsafe_allow_html=True)
 
-                # P1 state is keyed per canvas — use f"p1_{fmt}" as key
                 p1_key = f"p1_def_{fmt}"
                 if ss.get(p1_key):
                     st.warning(f"P1: {ss[p1_key]['x']},{ss[p1_key]['y']} → clicca in basso a destra")
