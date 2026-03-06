@@ -115,107 +115,87 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
         result.paste(g,(max(0,ox),max(0,oy)),mask)
     return result
 
-# ── Click canvas (FIXED coordinate mapping) ───────────────────────────────
+# ── Click canvas v3 — bulletproof ──────────────────────────────────────────
+# Approccio: usiamo un <img> HTML invece di <canvas> per il display.
+# Il click su <img> con offsetX/offsetY dà coordinate CSS relative all'immagine.
+# Il rapporto orig/display è calcolato Python-side e passato come costante.
+# Zero dipendenza da canvas sizing, devicePixelRatio, getBoundingClientRect.
 def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
     flat = flatten(img)
     orig_w, orig_h = flat.size
 
-    # Calcola dimensioni display mantenendo aspect ratio
-    disp_w = min(orig_w, 500)
+    # Dimensione display: max 480px larghezza
+    disp_w = min(orig_w, 480)
     disp_h = int(orig_h * disp_w / orig_w)
 
     resized = flat.resize((disp_w, disp_h), Image.LANCZOS)
     buf = io.BytesIO()
-    resized.save(buf, format="JPEG", quality=82)
+    resized.save(buf, format="JPEG", quality=85)
     b64 = base64.b64encode(buf.getvalue()).decode()
     uid = canvas_key.replace("-","_").replace(" ","_").replace(".","_")
 
-    # ── FIX v2: usa e.offsetX/offsetY ──
-    # offsetX/offsetY sono già relativi all'elemento target (il canvas)
-    # e sono in coordinate CSS. Non servono getBoundingClientRect né
-    # correzioni per devicePixelRatio o scaling dell'iframe.
-    # Basta mappare: (offsetX / cssWidth) * origWidth
-    # dove cssWidth è la dimensione CSS forzata nel style.
-    js = """
-    var c = document.getElementById('CV');
-    var ctx = c.getContext('2d');
-    var L = document.getElementById('LB');
-    var OW = __OW__, OH = __OH__;
-    var DW = __DW__, DH = __DH__;
+    # Rapporti calcolati Python-side — nessun calcolo DOM nel JS
+    ratio_x = orig_w / disp_w
+    ratio_y = orig_h / disp_h
 
-    var im = new Image();
-    im.onload = function(){
-        ctx.drawImage(im, 0, 0, DW, DH);
-    };
-    im.src = 'data:image/jpeg;base64,__B64__';
+    html = f"""<!DOCTYPE html>
+<html><head><style>
+html,body{{margin:0;padding:0;background:#111;overflow:hidden}}
+*{{box-sizing:border-box}}
+#wrap{{position:relative;display:inline-block;line-height:0}}
+#IMG{{display:block;width:{disp_w}px;height:{disp_h}px;cursor:crosshair;image-rendering:auto}}
+#dot{{position:absolute;width:18px;height:18px;border-radius:50%;
+  background:rgba(255,100,50,0.92);border:2px solid #fff;
+  pointer-events:none;display:none;transform:translate(-50%,-50%)}}
+#LB{{font:700 13px monospace;color:#ffe033;background:#1a1a1a;padding:6px 10px;min-height:28px}}
+</style></head><body>
+<div id="wrap">
+  <img id="IMG" src="data:image/jpeg;base64,{b64}"/>
+  <div id="dot"></div>
+</div>
+<div id="LB">clicca per definire il punto</div>
+<script>
+(function(){{
+  var img = document.getElementById('IMG');
+  var dot = document.getElementById('dot');
+  var lb  = document.getElementById('LB');
+  var RX  = {ratio_x:.6f};
+  var RY  = {ratio_y:.6f};
+  var OW  = {orig_w};
+  var OH  = {orig_h};
 
-    c.onclick = function(e) {
-        // offsetX/Y = coordinate relative all'elemento, in CSS pixels
-        // Questi NON sono influenzati da devicePixelRatio o iframe scaling
-        var cssX = e.offsetX;
-        var cssY = e.offsetY;
+  img.onclick = function(e) {{
+    // offsetX/Y su un <img> con dimensione CSS fissa = coordinate CSS pixel
+    // relative all'angolo top-left dell'immagine. Nessuna ambiguità.
+    var cx = e.offsetX;
+    var cy = e.offsetY;
 
-        // Mappa da CSS pixels → coordinate immagine originale
-        // cssX va da 0 a clientWidth (dimensione CSS del canvas)
-        var clientW = c.clientWidth;
-        var clientH = c.clientHeight;
+    // Converti in coordinate immagine originale
+    var ox = Math.round(cx * RX);
+    var oy = Math.round(cy * RY);
+    ox = Math.max(0, Math.min(OW - 1, ox));
+    oy = Math.max(0, Math.min(OH - 1, oy));
 
-        var origX = Math.round(cssX * OW / clientW);
-        var origY = Math.round(cssY * OH / clientH);
+    // Mostra marker
+    dot.style.display = 'block';
+    dot.style.left = cx + 'px';
+    dot.style.top  = cy + 'px';
 
-        // Clamp
-        origX = Math.max(0, Math.min(OW - 1, origX));
-        origY = Math.max(0, Math.min(OH - 1, origY));
+    lb.textContent = 'X=' + ox + ' Y=' + oy + ' (img ' + OW + 'x' + OH + ')';
 
-        // Marker: converti in coordinate canvas logiche per disegnare
-        var drawX = cssX * DW / clientW;
-        var drawY = cssY * DH / clientH;
+    // Invia a Streamlit
+    var inp = window.parent.document.querySelector('input[aria-label="ci_{uid}"]');
+    if (inp) {{
+      var ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+      ns.call(inp, ox + ',' + oy);
+      inp.dispatchEvent(new Event('input', {{bubbles:true}}));
+    }}
+  }};
+}})();
+</script>
+</body></html>"""
 
-        ctx.drawImage(im, 0, 0, DW, DH);
-        ctx.fillStyle = 'rgba(255,100,50,0.9)';
-        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(drawX, drawY, 9, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        L.textContent = 'X=' + origX + '  Y=' + origY + '  (img ' + OW + 'x' + OH + ', css ' + clientW + 'x' + clientH + ')';
-
-        var inp = window.parent.document.querySelector('input[aria-label="ci___UID__"]');
-        if (inp) {
-            var nativeSet = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype, 'value'
-            ).set;
-            nativeSet.call(inp, origX + ',' + origY);
-            inp.dispatchEvent(new Event('input', {bubbles: true}));
-        }
-    };
-    """
-    js = js.replace("__OW__", str(orig_w)).replace("__OH__", str(orig_h))
-    js = js.replace("__DW__", str(disp_w)).replace("__DH__", str(disp_h))
-    js = js.replace("__B64__", b64).replace("__UID__", uid)
-
-    # ── FIX: HTML con canvas dimensionato esplicitamente via CSS ──
-    # Forziamo width e height CSS uguali alle dimensioni logiche del canvas
-    # così getBoundingClientRect() == canvas.width/height (ratio 1:1)
-    # Questo elimina qualsiasi discrepanza di scaling
-    html = (
-        "<!DOCTYPE html><html><head><style>"
-        "html,body{margin:0;padding:0;border:0;background:#111;overflow:hidden}"
-        "*{box-sizing:border-box}"
-        "canvas{display:block;cursor:crosshair;"
-        "width:" + str(disp_w) + "px;height:" + str(disp_h) + "px}"
-        "#LB{font:700 13px monospace;color:#ffe033;background:#1a1a1a;padding:6px 10px;"
-        "min-height:28px}"
-        "</style></head><body>"
-        '<canvas id="CV" width="' + str(disp_w) + '" height="' + str(disp_h) + '"></canvas>'
-        '<div id="LB">clicca per definire il punto</div>'
-        "<script>" + js + "</script>"
-        "</body></html>"
-    )
-
-    st.components.v1.html(html, height=disp_h + 36, width=disp_w + 2, scrolling=False)
+    st.components.v1.html(html, height=disp_h + 36, width=disp_w + 4, scrolling=False)
     val = st.text_input(f"ci_{uid}", key=f"ci_{uid}", label_visibility="collapsed")
     if val and "," in val:
         try:
