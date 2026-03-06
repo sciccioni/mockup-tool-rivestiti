@@ -130,71 +130,64 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
     b64 = base64.b64encode(buf.getvalue()).decode()
     uid = canvas_key.replace("-","_").replace(" ","_").replace(".","_")
 
-    # ── FIX: JavaScript corretto per coordinate ──
-    # Il problema principale era che getBoundingClientRect() restituisce dimensioni
-    # CSS che possono differire dalle dimensioni logiche del canvas quando l'iframe
-    # viene scalato da Streamlit. La soluzione:
-    # 1. Usare canvas.width/height (dimensioni logiche) come riferimento fisso
-    # 2. Calcolare il rapporto tra dimensioni CSS e logiche per correggere l'offset
-    # 3. Mappare direttamente da coordinate canvas → coordinate immagine originale
-    # 4. Clamp delle coordinate per evitare valori fuori range
+    # ── FIX v2: usa e.offsetX/offsetY ──
+    # offsetX/offsetY sono già relativi all'elemento target (il canvas)
+    # e sono in coordinate CSS. Non servono getBoundingClientRect né
+    # correzioni per devicePixelRatio o scaling dell'iframe.
+    # Basta mappare: (offsetX / cssWidth) * origWidth
+    # dove cssWidth è la dimensione CSS forzata nel style.
     js = """
     var c = document.getElementById('CV');
     var ctx = c.getContext('2d');
     var L = document.getElementById('LB');
     var OW = __OW__, OH = __OH__;
+    var DW = __DW__, DH = __DH__;
 
     var im = new Image();
     im.onload = function(){
-        c.width = __DW__;
-        c.height = __DH__;
-        ctx.drawImage(im, 0, 0, c.width, c.height);
+        ctx.drawImage(im, 0, 0, DW, DH);
     };
     im.src = 'data:image/jpeg;base64,__B64__';
 
     c.onclick = function(e) {
-        var rect = c.getBoundingClientRect();
+        // offsetX/Y = coordinate relative all'elemento, in CSS pixels
+        // Questi NON sono influenzati da devicePixelRatio o iframe scaling
+        var cssX = e.offsetX;
+        var cssY = e.offsetY;
 
-        // Coordinate del click relative al canvas CSS
-        var cssX = e.clientX - rect.left;
-        var cssY = e.clientY - rect.top;
+        // Mappa da CSS pixels → coordinate immagine originale
+        // cssX va da 0 a clientWidth (dimensione CSS del canvas)
+        var clientW = c.clientWidth;
+        var clientH = c.clientHeight;
 
-        // Rapporto tra dimensioni logiche del canvas e dimensioni CSS renderizzate
-        var ratioX = c.width / rect.width;
-        var ratioY = c.height / rect.height;
+        var origX = Math.round(cssX * OW / clientW);
+        var origY = Math.round(cssY * OH / clientH);
 
-        // Coordinate nel sistema del canvas (pixel logici)
-        var canvasX = cssX * ratioX;
-        var canvasY = cssY * ratioY;
-
-        // Coordinate nell'immagine originale (proporzionali)
-        var origX = Math.round(canvasX * OW / c.width);
-        var origY = Math.round(canvasY * OH / c.height);
-
-        // Clamp ai limiti dell'immagine originale
+        // Clamp
         origX = Math.max(0, Math.min(OW - 1, origX));
         origY = Math.max(0, Math.min(OH - 1, origY));
 
-        // Ridisegna immagine e marker
-        ctx.drawImage(im, 0, 0, c.width, c.height);
+        // Marker: converti in coordinate canvas logiche per disegnare
+        var drawX = cssX * DW / clientW;
+        var drawY = cssY * DH / clientH;
+
+        ctx.drawImage(im, 0, 0, DW, DH);
         ctx.fillStyle = 'rgba(255,100,50,0.9)';
         ctx.strokeStyle = 'rgba(255,255,255,0.8)';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(canvasX, canvasY, 9, 0, Math.PI * 2);
+        ctx.arc(drawX, drawY, 9, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
 
-        // Mostra coordinate originali
-        L.textContent = 'X=' + origX + '  Y=' + origY + '  (img: ' + OW + 'x' + OH + ')';
+        L.textContent = 'X=' + origX + '  Y=' + origY + '  (img ' + OW + 'x' + OH + ', css ' + clientW + 'x' + clientH + ')';
 
-        // Invia valore a Streamlit tramite hidden input
         var inp = window.parent.document.querySelector('input[aria-label="ci___UID__"]');
         if (inp) {
-            var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            var nativeSet = Object.getOwnPropertyDescriptor(
                 window.HTMLInputElement.prototype, 'value'
             ).set;
-            nativeInputValueSetter.call(inp, origX + ',' + origY);
+            nativeSet.call(inp, origX + ',' + origY);
             inp.dispatchEvent(new Event('input', {bubbles: true}));
         }
     };
