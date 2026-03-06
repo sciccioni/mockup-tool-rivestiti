@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 import zipfile, io, base64
 from pathlib import Path
+from streamlit_drawable_canvas import st_canvas
 
 st.set_page_config(
     page_title="Mockup Compositor · PhotoSì",
@@ -107,142 +108,41 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
 
 # ── Click canvas ───────────────────────────────────────────────────────────
 def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
-    """Embed image in HTML canvas at fixed height. Returns clicked {x,y} in original px."""
+    """Uses streamlit-drawable-canvas — precise clicks, no offset issues."""
     flat = flatten(img)
     orig_w, orig_h = flat.size
-
-    # Resize to fixed display height
     disp_h = height_px
     disp_w = int(orig_w * disp_h / orig_h)
+    bg = flat.resize((disp_w, disp_h), Image.LANCZOS)
 
-    resized = flat.resize((disp_w, disp_h), Image.LANCZOS)
-    buf = io.BytesIO()
-    resized.save(buf, format="JPEG", quality=90)
-    b64 = base64.b64encode(buf.getvalue()).decode()
+    canvas_result = st_canvas(
+        background_image=bg,
+        height=disp_h,
+        width=disp_w,
+        drawing_mode="point",
+        point_display_radius=6,
+        stroke_color="#f5a623",
+        key=canvas_key,
+        update_streamlit=True,
+    )
 
-    uid = canvas_key.replace("-","_").replace(" ","_")
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-<style>
-  html,body {{ margin:0; padding:0; background:#1e1e22; overflow:hidden; }}
-  canvas {{ display:block; cursor:crosshair; border-radius:6px; width:{disp_w}px; height:{disp_h}px; }}
-  #info {{ font-size:13px; font-weight:700; color:#ffffff; font-family:monospace; padding:6px 10px; min-height:24px; background:#1e1e22; border:1px solid #7c6fff; border-radius:0 0 6px 6px; }}
-</style>
-</head>
-<body>
-<canvas id="cv_{uid}" width="{disp_w}" height="{disp_h}"></canvas>
-<div id="info_{uid}">👆 clicca per definire il punto</div>
-<script>
-(function(){{
-  const cv  = document.getElementById('cv_{uid}');
-  const ctx = cv.getContext('2d');
-  const info = document.getElementById('info_{uid}');
-  const OW={orig_w}, OH={orig_h}, DW={disp_w}, DH={disp_h};
-
-  const imgEl = new Image();
-  imgEl.onload = () => ctx.drawImage(imgEl, 0, 0, DW, DH);
-  imgEl.src = 'data:image/jpeg;base64,{b64}';
-
-  cv.onmousemove = function(e) {{
-    const r = cv.getBoundingClientRect();
-    // r.width is CSS rendered width, DW is canvas pixel width — must normalize
-    const dx = (e.clientX - r.left) * DW / r.width;
-    const dy = (e.clientY - r.top)  * DH / r.height;
-    const ox = Math.round(dx * OW / DW), oy = Math.round(dy * OH / DH);
-    info.textContent = '📍 ' + ox + ' , ' + oy + ' px';
-    ctx.drawImage(imgEl, 0, 0, DW, DH);
-    ctx.strokeStyle = 'rgba(245,166,35,0.7)';
-    ctx.lineWidth = 1; ctx.setLineDash([6,4]);
-    ctx.beginPath(); ctx.moveTo(dx,0); ctx.lineTo(dx,DH); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0,dy); ctx.lineTo(DW,dy); ctx.stroke();
-    ctx.setLineDash([]);
-    // Coordinate label on canvas - large, readable
-    const label = 'X: ' + ox + '  Y: ' + oy;
-    const fsize = Math.max(16, Math.round(DW/30));
-    ctx.font = 'bold ' + fsize + 'px monospace';
-    const tw = ctx.measureText(label).width;
-    ctx.fillStyle = 'rgba(10,10,20,0.88)';
-    ctx.fillRect(6, DH-fsize-22, tw+24, fsize+18);
-    ctx.fillStyle = '#ffdd00';
-    ctx.fillText(label, 18, DH-8);
-  }};
-
-  cv.onmouseleave = function() {{
-    ctx.drawImage(imgEl, 0, 0, DW, DH);
-    info.textContent = '👆 clicca per definire il punto';
-  }};
-
-  cv.onclick = function(e) {{
-    const r = cv.getBoundingClientRect();
-    const dx = (e.clientX - r.left) * DW / r.width;
-    const dy = (e.clientY - r.top)  * DH / r.height;
-    const ox = Math.round(dx * OW / DW), oy = Math.round(dy * OH / DH);
-    info.textContent = '✅ ' + ox + ' , ' + oy;
-    ctx.drawImage(imgEl, 0, 0, DW, DH);
-    ctx.fillStyle = 'rgba(245,166,35,0.9)';
-    ctx.beginPath(); ctx.arc(dx, dy, 8, 0, Math.PI*2); ctx.fill();
-    // send to parent
-    const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-    for (const inp of inputs) {{
-      if (inp.getAttribute('aria-label') === 'coord_{uid}') {{
-        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value')
-          .set.call(inp, ox+','+oy);
-        inp.dispatchEvent(new Event('input',{{bubbles:true}}));
-        break;
-      }}
-    }}
-  }};
-}})();
-</script>
-</body>
-</html>"""
-
-    iframe_h = disp_h + 55
-    st.components.v1.html(html, height=iframe_h, scrolling=False)
-
-    # Show last known coords from session state
-    last_key = f"last_coord_{uid}"
-    val = st.text_input("", key=f"coord_{uid}", label_visibility="collapsed",
-                        placeholder="← clicca sull'immagine per ottenere le coordinate")
-
-    if val and "," in val:
-        try:
-            cx, cy = val.strip().split(",")
-            result = {"x": int(cx), "y": int(cy)}
-            st.session_state[last_key] = result
-        except:
-            result = None
-    else:
-        result = None
-
-    # Always show last coords prominently outside iframe
-    last = st.session_state.get(last_key)
-    if last:
-        st.markdown(
-            f"<div style='background:#7c6fff;color:#ffffff;font-family:monospace;"
-            f"font-size:16px;font-weight:800;padding:10px 18px;border-radius:8px;"
-            f"margin:4px 0;letter-spacing:.05em'>"
-            f"📍 &nbsp; X = <b>{last['x']}</b> &nbsp;&nbsp; Y = <b>{last['y']}</b></div>",
-            unsafe_allow_html=True
-        )
-
-    return result
-
-# ── SIDEBAR ────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 🖼️ Mockup Compositor")
-    st.markdown("---")
-    labels = ["📁 Template","🎯 Calibra","🎨 Grafiche","📦 Esporta"]
-    for i,l in enumerate(labels,1):
-        if ss.step==i: st.markdown(f"**→ {i}. {l}**")
-        elif ss.step>i: st.markdown(f"<span style='color:#3ecf8e'>✓ {i}. {l}</span>", unsafe_allow_html=True)
-        else: st.markdown(f"<span style='color:#50505f'>{i}. {l}</span>", unsafe_allow_html=True)
-    st.markdown("---")
-    if ss.templates: st.caption(f"Template: {sum(len(v) for v in ss.templates.values())}")
-    if ss.default_coords: st.caption(f"Default: {', '.join(ss.default_coords.keys())}")
-    if ss.graphics: st.caption(f"Grafiche: {len(ss.graphics)}")
+    if canvas_result and canvas_result.json_data:
+        objs = canvas_result.json_data.get("objects", [])
+        if objs:
+            last = objs[-1]
+            cx = last.get("left", 0) + last.get("radius", 0)
+            cy = last.get("top", 0) + last.get("radius", 0)
+            ox = round(cx * orig_w / disp_w)
+            oy = round(cy * orig_h / disp_h)
+            st.markdown(
+                f"<div style='background:#1e1e22;border:2px solid #f5a623;border-radius:6px;"
+                f"padding:8px 16px;font-family:monospace;font-size:15px;font-weight:700;"
+                f"color:#f5a623;display:inline-block;margin:4px 0'>"
+                f"📍 X = {ox} &nbsp;&nbsp; Y = {oy}</div>",
+                unsafe_allow_html=True
+            )
+            return {"x": ox, "y": oy}
+    return None
 
 # ══════════════════════════════════════════════════════════════════
 # STEP 1: UPLOAD TEMPLATES
