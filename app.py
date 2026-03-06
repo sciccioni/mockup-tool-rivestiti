@@ -1,7 +1,7 @@
 import streamlit as st
 from PIL import Image, ImageDraw, ImageOps
 import numpy as np
-import zipfile, io, base64
+import zipfile, io
 from pathlib import Path
 
 st.set_page_config(
@@ -27,7 +27,6 @@ FORMATS = ["Orizzontale", "Quadrato", "Verticali"]
 for k, v in {
     "templates": {}, "default_coords": {}, "default_scale": {},
     "tpl_coords": {}, "tpl_scale": {}, "graphics": [], "step": 1,
-    "calib_p1": None, "calib_key": None,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -35,7 +34,6 @@ ss = st.session_state
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 def flatten(img: Image.Image) -> Image.Image:
-    """Flatten PNG transparency onto white"""
     if img.mode in ("RGBA", "LA", "P"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
         src = img.convert("RGBA") if img.mode == "P" else img
@@ -82,7 +80,7 @@ def auto_detect(img: Image.Image):
         return {"x":x,"y":y,"width":w,"height":h}
     except: return None
 
-def draw_overlay(img: Image.Image, coords, scale_pct, p1=None) -> Image.Image:
+def draw_overlay(img: Image.Image, coords, scale_pct) -> Image.Image:
     out = flatten(img)
     draw = ImageDraw.Draw(out, "RGBA")
     if coords:
@@ -96,9 +94,6 @@ def draw_overlay(img: Image.Image, coords, scale_pct, p1=None) -> Image.Image:
         gx,gy = x+(w-gw)//2, y+(h-gh)//2
         draw.rectangle([gx,gy,gx+gw,gy+gh], outline=(62,207,142,220), width=2)
         draw.rectangle([gx,gy,gx+gw,gy+gh], fill=(62,207,142,25))
-    if p1:
-        px,py = p1["x"],p1["y"]
-        draw.ellipse([px-10,py-10,px+10,py+10], fill=(245,166,35,230), outline=(255,255,255,180), width=2)
     return out
 
 def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_pct: int) -> Image.Image:
@@ -114,92 +109,6 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
         mask = g.convert("L").point(lambda v: 255)
         result.paste(g,(max(0,ox),max(0,oy)),mask)
     return result
-
-# ── Click canvas v5 — unique click ID per distinguere P1 da P2 ─────────────
-def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
-    flat = flatten(img)
-    orig_w, orig_h = flat.size
-
-    disp_w = min(orig_w, 480)
-    disp_h = int(orig_h * disp_w / orig_w)
-
-    resized = flat.resize((disp_w, disp_h), Image.LANCZOS)
-    buf = io.BytesIO()
-    resized.save(buf, format="JPEG", quality=85)
-    b64 = base64.b64encode(buf.getvalue()).decode()
-    uid = canvas_key.replace("-","_").replace(" ","_").replace(".","_")
-
-    html = f"""<!DOCTYPE html>
-<html><head><style>
-html,body{{margin:0;padding:0;background:#111;overflow:hidden}}
-*{{box-sizing:border-box}}
-#wrap{{position:relative;display:inline-block;line-height:0}}
-#IMG{{display:block;width:{disp_w}px;height:{disp_h}px;cursor:crosshair}}
-#dot{{position:absolute;width:18px;height:18px;border-radius:50%;
-  background:rgba(255,100,50,0.92);border:2px solid #fff;
-  pointer-events:none;display:none;transform:translate(-50%,-50%)}}
-#LB{{font:700 13px monospace;color:#ffe033;background:#1a1a1a;padding:6px 10px;min-height:28px}}
-</style></head><body>
-<div id="wrap">
-  <img id="IMG" src="data:image/jpeg;base64,{b64}" draggable="false"/>
-  <div id="dot"></div>
-</div>
-<div id="LB">clicca per definire il punto</div>
-<script>
-(function(){{
-  var imgEl = document.getElementById('IMG');
-  var dot = document.getElementById('dot');
-  var lb  = document.getElementById('LB');
-  var OW  = {orig_w};
-  var OH  = {orig_h};
-
-  imgEl.onclick = function(e) {{
-    e.preventDefault();
-    var cx = e.offsetX;
-    var cy = e.offsetY;
-    var renderedW = imgEl.offsetWidth;
-    var renderedH = imgEl.offsetHeight;
-    var ox = Math.round(cx * OW / renderedW);
-    var oy = Math.round(cy * OH / renderedH);
-    ox = Math.max(0, Math.min(OW - 1, ox));
-    oy = Math.max(0, Math.min(OH - 1, oy));
-
-    dot.style.display = 'block';
-    dot.style.left = cx + 'px';
-    dot.style.top  = cy + 'px';
-    lb.textContent = 'X=' + ox + ' Y=' + oy +
-      ' (off=' + cx + ',' + cy + ' rend=' + renderedW + 'x' + renderedH + ')';
-
-    // Valore con timestamp unico per distinguere click diversi
-    var val = ox + ',' + oy + ',' + Date.now();
-    var inp = window.parent.document.querySelector('input[aria-label="ci_{uid}"]');
-    if (inp) {{
-      var ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-      ns.call(inp, val);
-      inp.dispatchEvent(new Event('input', {{bubbles:true}}));
-    }}
-  }};
-}})();
-</script>
-</body></html>"""
-
-    st.components.v1.html(html, height=disp_h + 36, width=disp_w + 4, scrolling=False)
-
-    # Leggi il valore. Formato: "x,y,timestamp"
-    # Il timestamp ci permette di sapere se è un click nuovo o vecchio
-    last_key = f"last_click_ts_{uid}"
-    val = st.text_input(f"ci_{uid}", key=f"ci_{uid}", label_visibility="collapsed")
-    if val and val.count(",") >= 2:
-        try:
-            parts = val.split(",")
-            cx, cy, ts = int(parts[0]), int(parts[1]), parts[2]
-            # Solo se il timestamp è diverso dall'ultimo processato
-            if ts != ss.get(last_key):
-                ss[last_key] = ts
-                return {"x": cx, "y": cy}
-        except:
-            pass
-    return None
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -227,7 +136,7 @@ if ss.step == 1:
             ss.step=2; st.rerun()
 
 # ══════════════════════════════════════════════════════════════════
-# STEP 2: CALIBRATE
+# STEP 2: CALIBRATE (Auto-detect + Form manuale + Preview)
 # ══════════════════════════════════════════════════════════════════
 elif ss.step == 2:
     st.markdown("## 🎯 Step 2 — Calibra le Zone")
@@ -278,47 +187,12 @@ elif ss.step == 2:
                         f"<span style='color:#a89eff'>Scala</span> <span style='color:#f5a623;font-weight:600'>{new_scale}%</span>"
                         f"</div>", unsafe_allow_html=True)
 
-                p1_key = f"p1_def_{fmt}"
-                if ss.get(p1_key):
-                    st.warning(f"P1: {ss[p1_key]['x']},{ss[p1_key]['y']} → clicca in basso a destra")
-                    if st.button("✕ Annulla", key=f"canc_{fmt}"):
-                        ss[p1_key] = None; st.rerun()
-                else:
-                    st.caption("👆 Click P1 alto-sx → P2 basso-dx")
-
             with col_img:
-                p1_show = ss.get(f"p1_def_{fmt}")
-                overlay = draw_overlay(tpls[0]["img"], def_coords, new_scale, p1_show)
-                click = click_canvas(overlay, f"def_{fmt}", height_px=380)
-
-                # DEBUG: mostra punto cliccato sull'immagine originale
-                if click:
-                    verify = flatten(tpls[0]["img"]).copy()
-                    vdraw = ImageDraw.Draw(verify, "RGBA")
-                    cx, cy = click["x"], click["y"]
-                    vdraw.line([cx-40, cy, cx+40, cy], fill=(255,0,0,255), width=5)
-                    vdraw.line([cx, cy-40, cx, cy+40], fill=(255,0,0,255), width=5)
-                    vdraw.ellipse([cx-10, cy-10, cx+10, cy+10], fill=(255,0,0,255))
-                    if def_coords:
-                        dx,dy = def_coords["x"],def_coords["y"]
-                        dw,dh = def_coords["width"],def_coords["height"]
-                        vdraw.rectangle([dx,dy,dx+dw,dy+dh], outline=(0,0,255,255), width=5)
-                    st.image(verify, caption=f"VERIFICA: croce rossa=click({cx},{cy}), rettangolo blu=calibrato", use_container_width=True)
-
-                if click:
-                    p1_key = f"p1_def_{fmt}"
-                    if not ss.get(p1_key):
-                        ss[p1_key] = click; st.rerun()
-                    else:
-                        p1 = ss[p1_key]
-                        x = min(p1["x"], click["x"]); y = min(p1["y"], click["y"])
-                        w = abs(click["x"]-p1["x"]); h = abs(click["y"]-p1["y"])
-                        st.info(f"🔍 P1=({p1['x']},{p1['y']}) P2=({click['x']},{click['y']}) → X={x} Y={y} W={w} H={h}")
-                        if w > 10 and h > 10:
-                            ss.default_coords[fmt] = {"x":x,"y":y,"width":w,"height":h}
-                        else:
-                            st.warning(f"⚠️ W={w} o H={h} troppo piccoli, non salvato")
-                        ss[p1_key] = None; st.rerun()
+                overlay = draw_overlay(tpls[0]["img"], def_coords, new_scale)
+                st.image(overlay, use_container_width=True)
+                if def_coords:
+                    ow, oh = tpls[0]["img"].size
+                    st.caption(f"Template: {ow}×{oh}px — Zona: ({def_coords['x']},{def_coords['y']}) → ({def_coords['x']+def_coords['width']},{def_coords['y']+def_coords['height']})")
 
             # Per-template overrides
             st.markdown("---")
@@ -361,24 +235,8 @@ elif ss.step == 2:
                                 st.rerun()
 
                 with ocol2:
-                    ovck = f"ov_{fmt}_{sel_name}"
-                    p1_ov_key = f"p1_{ovck}"
-                    p1_ov = ss.get(p1_ov_key)
-                    ov_overlay = draw_overlay(sel_tpl["img"], ov_coords, nov_scale, p1_ov)
-                    click2 = click_canvas(ov_overlay, ovck, height_px=320)
-                    if click2:
-                        if not ss.get(p1_ov_key):
-                            ss[p1_ov_key] = click2; st.rerun()
-                        else:
-                            p1 = ss[p1_ov_key]
-                            x = min(p1["x"],click2["x"]); y = min(p1["y"],click2["y"])
-                            w = abs(click2["x"]-p1["x"]); h = abs(click2["y"]-p1["y"])
-                            if w>10 and h>10:
-                                if fmt not in ss.tpl_coords: ss.tpl_coords[fmt]={}
-                                ss.tpl_coords[fmt][sel_name]={"x":x,"y":y,"width":w,"height":h}
-                                if fmt not in ss.tpl_scale: ss.tpl_scale[fmt]={}
-                                ss.tpl_scale[fmt][sel_name]=nov_scale
-                            ss[p1_ov_key]=None; st.rerun()
+                    ov_overlay = draw_overlay(sel_tpl["img"], ov_coords, nov_scale)
+                    st.image(ov_overlay, use_container_width=True)
 
     st.markdown("---")
     c1,c2=st.columns(2)
