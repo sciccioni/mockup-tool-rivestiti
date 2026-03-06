@@ -290,6 +290,21 @@ elif ss.step == 2:
                 p1_show = ss.get(f"p1_def_{fmt}")
                 overlay = draw_overlay(tpls[0]["img"], def_coords, new_scale, p1_show)
                 click = click_canvas(overlay, f"def_{fmt}", height_px=380)
+
+                # DEBUG: mostra punto cliccato sull'immagine originale
+                if click:
+                    verify = flatten(tpls[0]["img"]).copy()
+                    vdraw = ImageDraw.Draw(verify, "RGBA")
+                    cx, cy = click["x"], click["y"]
+                    vdraw.line([cx-40, cy, cx+40, cy], fill=(255,0,0,255), width=5)
+                    vdraw.line([cx, cy-40, cx, cy+40], fill=(255,0,0,255), width=5)
+                    vdraw.ellipse([cx-10, cy-10, cx+10, cy+10], fill=(255,0,0,255))
+                    if def_coords:
+                        dx,dy = def_coords["x"],def_coords["y"]
+                        dw,dh = def_coords["width"],def_coords["height"]
+                        vdraw.rectangle([dx,dy,dx+dw,dy+dh], outline=(0,0,255,255), width=5)
+                    st.image(verify, caption=f"VERIFICA: croce rossa=click({cx},{cy}), rettangolo blu=calibrato", use_container_width=True)
+
                 if click:
                     p1_key = f"p1_def_{fmt}"
                     if not ss.get(p1_key):
@@ -302,7 +317,7 @@ elif ss.step == 2:
                         if w > 10 and h > 10:
                             ss.default_coords[fmt] = {"x":x,"y":y,"width":w,"height":h}
                         else:
-                            st.warning(f"⚠️ W={w} o H={h} troppo piccoli (< 10), non salvato. P1 e P2 coincidono?")
+                            st.warning(f"⚠️ W={w} o H={h} troppo piccoli, non salvato")
                         ss[p1_key] = None; st.rerun()
 
             # Per-template overrides
