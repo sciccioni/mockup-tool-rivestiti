@@ -279,7 +279,18 @@ elif ss.step == 2:
                         st.rerun()
 
                 if def_coords:
-                    st.success(f"✅ x={def_coords['x']} y={def_coords['y']}\nw={def_coords['width']} h={def_coords['height']}\nscala={new_scale}%")
+                    st.markdown(f"""
+<div style='background:#1e1e22;border:1px solid #3ecf8e;border-radius:8px;padding:10px 14px;font-family:monospace;font-size:13px;line-height:2'>
+  <span style='color:#3ecf8e;font-weight:700'>✅ Calibrato</span><br/>
+  <span style='color:#a89eff'>X</span> <span style='color:#fff;font-weight:600'>{def_coords['x']}</span>
+  &nbsp;&nbsp;
+  <span style='color:#a89eff'>Y</span> <span style='color:#fff;font-weight:600'>{def_coords['y']}</span><br/>
+  <span style='color:#a89eff'>W</span> <span style='color:#fff;font-weight:600'>{def_coords['width']}</span>
+  &nbsp;&nbsp;
+  <span style='color:#a89eff'>H</span> <span style='color:#fff;font-weight:600'>{def_coords['height']}</span><br/>
+  <span style='color:#a89eff'>Scala</span> <span style='color:#f5a623;font-weight:600'>{new_scale}%</span>
+</div>
+""", unsafe_allow_html=True)
 
                 # P1 status
                 ck = f"def_{fmt}"
