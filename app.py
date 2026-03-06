@@ -106,78 +106,46 @@ def composite(graphic: Image.Image, template: Image.Image, coords: dict, scale_p
     return result
 
 # ── Click canvas ───────────────────────────────────────────────────────────
-def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
+def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
     flat = flatten(img)
     orig_w, orig_h = flat.size
-    disp_h = height_px
-    disp_w = int(orig_w * disp_h / orig_h)
+    disp_w = min(orig_w, 500)
+    disp_h = int(orig_h * disp_w / orig_w)
     resized = flat.resize((disp_w, disp_h), Image.LANCZOS)
     buf = io.BytesIO()
-    resized.save(buf, format="JPEG", quality=90)
+    resized.save(buf, format="JPEG", quality=82)
     b64 = base64.b64encode(buf.getvalue()).decode()
     uid = canvas_key.replace("-","_").replace(" ","_").replace(".","_")
 
-    # KEY FIX: canvas pixel size == CSS size == no scaling distortion
-    # iframe width set to exact disp_w so no horizontal overflow
-    html = f"""<!DOCTYPE html>
-<html><head><style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#1a1a1e;width:{disp_w}px;overflow:hidden}}
-canvas{{display:block;cursor:crosshair}}
-#lbl{{font:700 14px monospace;color:#ffe033;background:#1a1a1e;
-      padding:5px 12px;min-height:26px;border-top:1px solid #333}}
-</style></head><body>
-<canvas id="c" width="{disp_w}" height="{disp_h}"></canvas>
-<div id="lbl">👆 muovi il mouse sull'immagine</div>
-<script>
-(function(){{
-const c=document.getElementById('c');
-const x=c.getContext('2d');
-const L=document.getElementById('lbl');
-const OW={orig_w},OH={orig_h},DW={disp_w},DH={disp_h};
-const im=new Image();
-im.onload=()=>x.drawImage(im,0,0,DW,DH);
-im.src='data:image/jpeg;base64,{b64}';
+    js = """
+var c=document.getElementById('CV');
+var ctx=c.getContext('2d');
+var L=document.getElementById('LB');
+var OW=__OW__,OH=__OH__,DW=__DW__,DH=__DH__;
+var im=new Image();
+im.onload=function(){ctx.drawImage(im,0,0,DW,DH);};
+im.src='data:image/jpeg;base64,__B64__';
+function pos(e){var r=c.getBoundingClientRect();return[Math.round((e.clientX-r.left)*OW/DW),Math.round((e.clientY-r.top)*OH/DH)];}
+c.onmousemove=function(e){var p=pos(e);var r=c.getBoundingClientRect();var dx=e.clientX-r.left,dy=e.clientY-r.top;ctx.drawImage(im,0,0,DW,DH);ctx.strokeStyle='rgba(255,224,51,0.8)';ctx.lineWidth=1;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(dx,0);ctx.lineTo(dx,DH);ctx.stroke();ctx.beginPath();ctx.moveTo(0,dy);ctx.lineTo(DW,dy);ctx.stroke();ctx.setLineDash([]);L.textContent='X='+p[0]+'  Y='+p[1];};
+c.onmouseleave=function(){ctx.drawImage(im,0,0,DW,DH);L.textContent='muovi il mouse';};
+c.onclick=function(e){var p=pos(e);var r=c.getBoundingClientRect();var dx=e.clientX-r.left,dy=e.clientY-r.top;ctx.drawImage(im,0,0,DW,DH);ctx.fillStyle='rgba(255,100,50,0.9)';ctx.beginPath();ctx.arc(dx,dy,9,0,Math.PI*2);ctx.fill();L.textContent='CLICK X='+p[0]+' Y='+p[1];var inp=window.parent.document.querySelector('input[aria-label="ci___UID__"]');if(inp){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inp,p[0]+','+p[1]);inp.dispatchEvent(new Event('input',{bubbles:true}));}};
+"""
+    js = js.replace("__OW__", str(orig_w)).replace("__OH__", str(orig_h))
+    js = js.replace("__DW__", str(disp_w)).replace("__DH__", str(disp_h))
+    js = js.replace("__B64__", b64).replace("__UID__", uid)
 
-function pos(e){{
-  // canvas CSS size == canvas pixel size, so no scaling needed
-  const r=c.getBoundingClientRect();
-  return[Math.round((e.clientX-r.left)*OW/DW),
-         Math.round((e.clientY-r.top)*OH/DH)];
-}}
-
-c.onmousemove=function(e){{
-  const[ox,oy]=pos(e);
-  const r=c.getBoundingClientRect();
-  const dx=e.clientX-r.left, dy=e.clientY-r.top;
-  x.drawImage(im,0,0,DW,DH);
-  x.strokeStyle='rgba(255,224,51,0.8)';x.lineWidth=1;x.setLineDash([5,4]);
-  x.beginPath();x.moveTo(dx,0);x.lineTo(dx,DH);x.stroke();
-  x.beginPath();x.moveTo(0,dy);x.lineTo(DW,dy);x.stroke();
-  x.setLineDash([]);
-  L.textContent='📍  X = '+ox+'   Y = '+oy;
-}};
-c.onmouseleave=function(){{
-  x.drawImage(im,0,0,DW,DH);
-  L.textContent='👆 muovi il mouse sull\'immagine';
-}};
-c.onclick=function(e){{
-  const[ox,oy]=pos(e);
-  const r=c.getBoundingClientRect();
-  const dx=e.clientX-r.left,dy=e.clientY-r.top;
-  x.drawImage(im,0,0,DW,DH);
-  x.fillStyle='rgba(255,100,50,0.9)';
-  x.beginPath();x.arc(dx,dy,9,0,Math.PI*2);x.fill();
-  L.textContent='✅  CLICK  X = '+ox+'   Y = '+oy;
-  const inp=window.parent.document.querySelector('input[aria-label="ci_{uid}"]');
-  if(inp){{
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')
-      .set.call(inp,ox+','+oy);
-    inp.dispatchEvent(new Event('input',{{bubbles:true}}));
-  }}
-}};
-}})();
-</script></body></html>"""
+    html = (
+        "<!DOCTYPE html><html><head><style>"
+        "*{margin:0;padding:0;box-sizing:border-box}"
+        "body{background:#111;overflow:hidden}"
+        "canvas{display:block;cursor:crosshair}"
+        "#LB{font:700 15px monospace;color:#ffe033;background:#111;padding:5px 10px;min-height:28px}"
+        "</style></head><body>"
+        '<canvas id="CV" width="' + str(disp_w) + '" height="' + str(disp_h) + '"></canvas>'
+        '<div id="LB">muovi il mouse</div>'
+        "<script>" + js + "</script>"
+        "</body></html>"
+    )
 
     st.components.v1.html(html, height=disp_h+36, width=disp_w, scrolling=False)
     val = st.text_input("", key=f"ci_{uid}", label_visibility="collapsed")
