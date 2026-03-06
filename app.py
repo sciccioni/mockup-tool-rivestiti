@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 import numpy as np
 import zipfile, io, base64
 from pathlib import Path
@@ -129,47 +129,46 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=380):
     uid = canvas_key.replace("-","_").replace(" ","_").replace(".","_")
 
     js = """
-var c=document.getElementById('CV');
-var ctx=c.getContext('2d');
-var L=document.getElementById('LB');
-var OW=__OW__,OH=__OH__,DW=__DW__,DH=__DH__;
-var im=new Image();
-im.onload=function(){ctx.drawImage(im,0,0,DW,DH);};
-im.src='data:image/jpeg;base64,__B64__';
-function pos(e){
-  // Use canvas offset directly — ignore any iframe body margin
-  var r=c.getBoundingClientRect();
-  var dx=e.clientX-r.left;
-  var dy=e.clientY-r.top;
-  // dx/dy are in CSS pixels relative to canvas top-left
-  // canvas CSS size == canvas pixel size (no CSS scaling)
-  var ox=Math.round(dx*OW/DW);
-  var oy=Math.round(dy*OH/DH);
-  return[ox,oy,dx,dy];
-}
-c.onmousemove=function(e){
-  var p=pos(e);
-  ctx.drawImage(im,0,0,DW,DH);
-  ctx.strokeStyle='rgba(255,224,51,0.8)';ctx.lineWidth=1;ctx.setLineDash([5,4]);
-  ctx.beginPath();ctx.moveTo(p[2],0);ctx.lineTo(p[2],DH);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(0,p[3]);ctx.lineTo(DW,p[3]);ctx.stroke();
-  ctx.setLineDash([]);
-  L.textContent='X='+p[0]+'  Y='+p[1];
-};
-c.onmouseleave=function(){ctx.drawImage(im,0,0,DW,DH);L.textContent='muovi il mouse';};
-c.onclick=function(e){
-  var p=pos(e);
-  ctx.drawImage(im,0,0,DW,DH);
-  ctx.fillStyle='rgba(255,100,50,0.9)';
-  ctx.beginPath();ctx.arc(p[2],p[3],9,0,Math.PI*2);ctx.fill();
-  L.textContent='CLICK X='+p[0]+' Y='+p[1];
-  var inp=window.parent.document.querySelector('input[aria-label="ci___UID__"]');
-  if(inp){
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inp,p[0]+','+p[1]);
-    inp.dispatchEvent(new Event('input',{bubbles:true}));
-  }
-};
-"""
+    var c=document.getElementById('CV');
+    var ctx=c.getContext('2d');
+    var L=document.getElementById('LB');
+    var OW=__OW__,OH=__OH__,DW=__DW__,DH=__DH__;
+    var im=new Image();
+    im.onload=function(){ctx.drawImage(im,0,0,DW,DH);};
+    im.src='data:image/jpeg;base64,__B64__';
+    function pos(e){
+      var r=c.getBoundingClientRect();
+      var scaleX = c.width / r.width;
+      var scaleY = c.height / r.height;
+      var dx = (e.clientX - r.left) * scaleX;
+      var dy = (e.clientY - r.top) * scaleY;
+      var ox = Math.round(dx * OW / c.width);
+      var oy = Math.round(dy * OH / c.height);
+      return[ox,oy,dx,dy];
+    }
+    c.onmousemove=function(e){
+      var p=pos(e);
+      ctx.drawImage(im,0,0,DW,DH);
+      ctx.strokeStyle='rgba(255,224,51,0.8)';ctx.lineWidth=1;ctx.setLineDash([5,4]);
+      ctx.beginPath();ctx.moveTo(p[2],0);ctx.lineTo(p[2],DH);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(0,p[3]);ctx.lineTo(DW,p[3]);ctx.stroke();
+      ctx.setLineDash([]);
+      L.textContent='X='+p[0]+'  Y='+p[1];
+    };
+    c.onmouseleave=function(){ctx.drawImage(im,0,0,DW,DH);L.textContent='muovi il mouse';};
+    c.onclick=function(e){
+      var p=pos(e);
+      ctx.drawImage(im,0,0,DW,DH);
+      ctx.fillStyle='rgba(255,100,50,0.9)';
+      ctx.beginPath();ctx.arc(p[2],p[3],9,0,Math.PI*2);ctx.fill();
+      L.textContent='CLICK X='+p[0]+' Y='+p[1];
+      var inp=window.parent.document.querySelector('input[aria-label="ci___UID__"]');
+      if(inp){
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inp,p[0]+','+p[1]);
+        inp.dispatchEvent(new Event('input',{bubbles:true}));
+      }
+    };
+    """
     js = js.replace("__OW__", str(orig_w)).replace("__OH__", str(orig_h))
     js = js.replace("__DW__", str(disp_w)).replace("__DH__", str(disp_h))
     js = js.replace("__B64__", b64).replace("__UID__", uid)
@@ -188,13 +187,14 @@ c.onclick=function(e){
     )
 
     st.components.v1.html(html, height=disp_h+36, width=disp_w, scrolling=False)
-    val = st.text_input("", key=f"ci_{uid}", label_visibility="collapsed")
+    val = st.text_input(f"ci_{uid}", key=f"ci_{uid}", label_visibility="collapsed")
     if val and "," in val:
         try:
             cx,cy = val.split(",")
             return {"x":int(cx),"y":int(cy)}
         except: pass
     return None
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -209,7 +209,7 @@ if ss.step == 1:
                                      accept_multiple_files=True, key=f"up_{fmt}",
                                      label_visibility="collapsed")
             if files:
-                ss.templates[fmt] = [{"name":Path(f.name).stem,"img":Image.open(f),"ext":Path(f.name).suffix.lower()} for f in files]
+                ss.templates[fmt] = [{"name":Path(f.name).stem,"img":ImageOps.exif_transpose(Image.open(f)),"ext":Path(f.name).suffix.lower()} for f in files]
                 st.success(f"✓ {len(files)}")
                 tcols = st.columns(min(3,len(files)))
                 for i,t in enumerate(ss.templates[fmt][:6]):
@@ -376,7 +376,7 @@ elif ss.step == 3:
     uploaded = st.file_uploader("Carica grafiche", type=["jpg","jpeg","png","webp"],
                                 accept_multiple_files=True, label_visibility="collapsed")
     if uploaded:
-        ss.graphics=[{"name":Path(f.name).stem,"img":Image.open(f),"ext":Path(f.name).suffix.lower()} for f in uploaded]
+        ss.graphics=[{"name":Path(f.name).stem,"img":ImageOps.exif_transpose(Image.open(f)),"ext":Path(f.name).suffix.lower()} for f in uploaded]
     elif ss.graphics:
         st.info(f"✓ {len(ss.graphics)} già caricate")
     if ss.graphics:
