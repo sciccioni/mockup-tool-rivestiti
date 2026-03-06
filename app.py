@@ -189,16 +189,34 @@ def click_canvas(img: Image.Image, canvas_key: str, height_px=400):
 
     iframe_h = disp_h + 30
     st.components.v1.html(html, height=iframe_h, scrolling=False)
+
+    # Show last known coords from session state
+    last_key = f"last_coord_{uid}"
     val = st.text_input("", key=f"coord_{uid}", label_visibility="collapsed",
-                        placeholder="clicca sull'immagine…")
+                        placeholder="← clicca sull'immagine per ottenere le coordinate")
+
     if val and "," in val:
         try:
-            cx,cy = val.split(",")
-            result = {"x":int(cx),"y":int(cy)}
-            st.markdown(f"<div style='background:#7c6fff;color:#fff;font-family:monospace;font-size:14px;font-weight:700;padding:8px 14px;border-radius:6px;display:inline-block'>📍 X: {result["x"]} px &nbsp;&nbsp; Y: {result["y"]} px</div>", unsafe_allow_html=True)
-            return result
-        except: pass
-    return None
+            cx, cy = val.strip().split(",")
+            result = {"x": int(cx), "y": int(cy)}
+            st.session_state[last_key] = result
+        except:
+            result = None
+    else:
+        result = None
+
+    # Always show last coords prominently outside iframe
+    last = st.session_state.get(last_key)
+    if last:
+        st.markdown(
+            f"<div style='background:#7c6fff;color:#ffffff;font-family:monospace;"
+            f"font-size:16px;font-weight:800;padding:10px 18px;border-radius:8px;"
+            f"margin:4px 0;letter-spacing:.05em'>"
+            f"📍 &nbsp; X = <b>{last['x']}</b> &nbsp;&nbsp; Y = <b>{last['y']}</b></div>",
+            unsafe_allow_html=True
+        )
+
+    return result
 
 # ── SIDEBAR ────────────────────────────────────────────────────────────────
 with st.sidebar:
